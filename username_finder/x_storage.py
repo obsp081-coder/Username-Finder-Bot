@@ -247,11 +247,22 @@ class XStore:
             if row is None:
                 raise ValueError("عملية X غير موجودة.")
             data = dict(row)
+            total = data["cursor"] - sum(data[key] for key in ("blank", "duplicates", "invalid", "skipped"))
+            checkpointed = data["cursor"] > 0
             counts = dict(
                 self.store.db.execute(
-                    "SELECT state,COUNT(*) FROM x_queue WHERE run_id=? GROUP BY state", (identity,)
+                    "SELECT state,COUNT(*) FROM x_queue WHERE run_id=? "
+                    + ("AND state IN ('Done','InFlight') " if checkpointed else "")
+                    + "GROUP BY state",
+                    (identity,),
                 ).fetchall()
             )
+            if checkpointed:
+                pending = total - sum(counts.values())
+                if pending < 0:
+                    raise ValueError("عدادات طابور X غير متسقة؛ يلزم مراجعة البيانات.")
+                if pending:
+                    counts["Pending"] = pending
             data.update(
                 total=sum(counts.values()), completed=counts.get("Done", 0), pending=counts.get("Pending", 0)
             )
@@ -370,15 +381,22 @@ class XStore:
     def recover(self):
         with self.store.lock:
             db = self.store.db
-            for row in db.execute("SELECT * FROM x_queue WHERE state='InFlight'").fetchall():
-                result = x.result_for(
-                    row["username"],
-                    x.protocol.Response(error="interrupted_delivery_uncertain", complete=False),
-                )
-                result["delivery_uncertain"] = True
-                result["connection"] = self.connection_for_run(row["run_id"])
-                self.finish(dict(row), result, blocked="interrupted_delivery_uncertain")
-                self.end(row["run_id"], "Restricted", "interrupted_delivery_uncertain")
+            while True:
+                rows = db.execute(
+                    "SELECT * FROM x_queue WHERE run_id IN (SELECT id FROM x_runs) "
+                    "AND state='InFlight' LIMIT 100"
+                ).fetchall()
+                for row in rows:
+                    result = x.result_for(
+                        row["username"],
+                        x.protocol.Response(error="interrupted_delivery_uncertain", complete=False),
+                    )
+                    result["delivery_uncertain"] = True
+                    result["connection"] = self.connection_for_run(row["run_id"])
+                    self.finish(dict(row), result, blocked="interrupted_delivery_uncertain")
+                    self.end(row["run_id"], "Restricted", "interrupted_delivery_uncertain")
+                if len(rows) < 100:
+                    break
             with self.store.transaction() as db:
                 db.execute(
                     "UPDATE x_recovery_events SET state='Uncertain',evidence=? WHERE state='InFlight'",

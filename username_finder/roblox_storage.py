@@ -376,25 +376,35 @@ class RobloxStore:
             return self.store.db.execute("SELECT COUNT(*) FROM roblox_names").fetchone()[0]
 
     def recover(self):
+        # Probe each existing run through (run_id,state,position), not the entire queue.
+        # Each bounded batch commits evidence and delivery state together.
+        while True:
+            with self.store.transaction() as db:
+                tasks = db.execute(
+                    "SELECT * FROM roblox_queue WHERE run_id IN (SELECT id FROM roblox_runs) "
+                    "AND state='InFlight' LIMIT 100"
+                ).fetchall()
+                for task in tasks:
+                    result = result_for(
+                        task["username"],
+                        protocol.Response(error="interrupted_delivery_uncertain", complete=False),
+                    )
+                    result["delivery_uncertain"] = True
+                    self._insert(
+                        db,
+                        result,
+                        "interrupted",
+                        f"{task['run_id']}:{task['position']}",
+                        task["run_id"],
+                        completed=False,
+                    )
+                    db.execute(
+                        "UPDATE roblox_queue SET state='Done' WHERE run_id=? AND position=?",
+                        (task["run_id"], task["position"]),
+                    )
+            if len(tasks) < 100:
+                break
         with self.store.transaction() as db:
-            for task in db.execute("SELECT * FROM roblox_queue WHERE state='InFlight'").fetchall():
-                result = result_for(
-                    task["username"],
-                    protocol.Response(error="interrupted_delivery_uncertain", complete=False),
-                )
-                result["delivery_uncertain"] = True
-                self._insert(
-                    db,
-                    result,
-                    "interrupted",
-                    f"{task['run_id']}:{task['position']}",
-                    task["run_id"],
-                    completed=False,
-                )
-                db.execute(
-                    "UPDATE roblox_queue SET state='Done' WHERE run_id=? AND position=?",
-                    (task["run_id"], task["position"]),
-                )
             db.execute("UPDATE roblox_runs SET state='Paused',updated_at=? WHERE state='Running'", (now(),))
             db.execute("UPDATE roblox_runs SET state='PreparationPaused' WHERE state='Preparing'")
             control = self._control(db)
@@ -524,11 +534,24 @@ class RobloxStore:
             if not run:
                 return None
             result = dict(run)
+            # Input counters and queue inserts are committed atomically by preparation.
+            # Count only the much smaller non-pending ranges in the existing index.
+            total = run["input_cursor"] - run["duplicates"] - run["invalid"] - run["blank"]
+            checkpointed = bool(json.loads(run["preparation"])) and run["input_cursor"] > 0
             result["counts"] = dict(
                 self.store.db.execute(
-                    "SELECT state,COUNT(*) FROM roblox_queue WHERE run_id=? GROUP BY state", (run_id,)
+                    "SELECT state,COUNT(*) FROM roblox_queue WHERE run_id=? "
+                    + ("AND state IN ('Done','Skipped','InFlight') " if checkpointed else "")
+                    + "GROUP BY state",
+                    (run_id,),
                 )
             )
+            if checkpointed:
+                pending = total - sum(result["counts"].values())
+                if pending < 0:
+                    raise ValueError("عدادات طابور Roblox غير متسقة؛ يلزم مراجعة البيانات.")
+                if pending:
+                    result["counts"]["Pending"] = pending
             result["total"] = sum(result["counts"].values())
             return result
 

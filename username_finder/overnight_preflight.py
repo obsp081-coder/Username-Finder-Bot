@@ -91,12 +91,27 @@ def check_job(repo, night, intent, *, storage=probe_storage, clock=lambda: datet
             control = repo.control()
             data = night.get(intent.identity) or {}
             prefix = "roblox" if intent.platform == "Roblox" else "x"
-            counts = dict(
-                repo.store.db.execute(
-                    f"SELECT state,COUNT(*) FROM {prefix}_queue WHERE run_id=? GROUP BY state",
-                    (intent.identity,),
-                )
-            )
+            # Seek distinct states through (run_id,state,position). A GROUP BY over
+            # millions of Pending rows would block all users of the shared connection.
+            states = set()
+            row = repo.store.db.execute(
+                f"SELECT state FROM {prefix}_queue WHERE run_id=? ORDER BY state LIMIT 1",
+                (intent.identity,),
+            ).fetchone()
+            while row is not None:
+                state = row[0]
+                states.add(state)
+                if state not in {"Pending", "Done", "Skipped", "InFlight"}:
+                    break
+                row = repo.store.db.execute(
+                    f"SELECT state FROM {prefix}_queue WHERE run_id=? AND state>? ORDER BY state LIMIT 1",
+                    (intent.identity, state),
+                ).fetchone()
+            counts = dict.fromkeys(states, 1)
+            saved_pending = run.get("pending", run.get("counts", {}).get("Pending", 0))
+            if bool(saved_pending) != ("Pending" in states):
+                result.errors.append("عدادات الطابور لا تطابق وجود المرشحين؛ يلزم مراجعة البيانات.")
+            counts["Pending"] = saved_pending if "Pending" in states else 0
             active = repo.store.db.execute(
                 f"SELECT COUNT(*) FROM {prefix}_runs WHERE state='Running'"
             ).fetchone()[0]
