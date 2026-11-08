@@ -5,12 +5,13 @@ from pathlib import Path
 
 
 class RobloxActivity:
-    def __init__(self, database):
+    def __init__(self, database, *, recover_pending=None):
         database = Path(database).resolve()
         self.path = database.with_name(database.name + ".roblox-activity.lock")
         self.block = self.path.with_suffix(".blocked")
         self.pending = self.path.with_suffix(".bulk-state")
         self.stream = None
+        self.recover_pending = recover_pending
 
     def __enter__(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,16 +34,28 @@ class RobloxActivity:
             raise ValueError("توجد عملية Roblox أخرى نشطة؛ لم يُرسل طلب.") from exc
         self.stream = stream
         try:
-            pending = self.pending.read_bytes() if self.pending.exists() else b""
-            if self.block.exists() or (pending and not pending.endswith(b"Clear\n")):
+            pending = b""
+            if self.pending.exists():
+                with self.pending.open("rb") as stream:
+                    stream.seek(0, os.SEEK_END)
+                    stream.seek(max(0, stream.tell() - 1024))
+                    pending = stream.read(1024)
+            if self.block.exists():
                 raise ValueError("يوجد توقف Bulk وقائي محفوظ؛ يلزم تدقيق الدليل قبل أي تشغيل Roblox جديد.")
+            if pending and not pending.endswith(b"Clear\n"):
+                last = pending.splitlines()[-1]
+                if not self.recover_pending or not self.recover_pending(last):
+                    raise ValueError("طلب Roblox غير محسوم؛ راجع دليله قبل أي إرسال جديد.")
+                self.clear_pending()
         except BaseException:
             self.__exit__(None, None, None)
             raise
         return self
 
-    def mark_pending(self):
-        self._state(b"Pending\n")
+    def mark_pending(self, owner=""):
+        if owner and (not owner.isascii() or not owner.replace(":", "").isalnum()):
+            raise ValueError("Invalid activity owner")
+        self._state(("Pending:" + owner + "\n").encode("ascii") if owner else b"Pending\n")
 
     def clear_pending(self):
         self._state(b"Clear\n")

@@ -40,6 +40,7 @@ from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
 from .roblox_bulk_ui import BulkPanel
+from .roblox_prefilter_ui import PrefilterPanel
 from .roblox_runner import RobloxRunner
 from .roblox_storage import CHECK_INTERVALS, RobloxStore
 from .ui_helpers import local_time, style_combo_popup
@@ -78,7 +79,11 @@ class RobloxPanel(QScrollArea):
 
     @property
     def busy(self):
-        return self._busy or (hasattr(self, "bulk") and self.bulk.busy)
+        return (
+            self._busy
+            or (hasattr(self, "bulk") and self.bulk.busy)
+            or (hasattr(self, "prefilter") and self.prefilter.busy)
+        )
 
     @busy.setter
     def busy(self, value):
@@ -298,12 +303,17 @@ class RobloxPanel(QScrollArea):
         self.setWidget(content)
         self.checking_mode = QComboBox()
         self.checking_mode.addItems(["الفحص الفردي (الدقيق)", "البحث الجماعي عن الحسابات Bulk (تجريبي)"])
+        self.checking_mode.addItem("تصفية الملفات الكبيرة Bulk — دليل حسابات")
         style_combo_popup(self.checking_mode)
         root_layout.insertWidget(3, self.checking_mode)
         self.bulk = BulkPanel(self)
         self.bulk.idle.connect(self.idle.emit)
         root_layout.addWidget(self.bulk)
         self.bulk.hide()
+        self.prefilter = PrefilterPanel(self)
+        self.prefilter.idle.connect(self.idle.emit)
+        root_layout.addWidget(self.prefilter)
+        self.prefilter.hide()
         self.checking_mode.currentIndexChanged.connect(self.change_checking_mode)
         for signal in (
             self.class_filter.currentIndexChanged,
@@ -317,6 +327,7 @@ class RobloxPanel(QScrollArea):
         self.workspace.setVisible(index == 0)
         self.individual_actions.setVisible(index == 0)
         self.bulk.setVisible(index == 1)
+        self.prefilter.setVisible(index == 2)
 
     @staticmethod
     def _button(label, callback):
@@ -527,6 +538,9 @@ class RobloxPanel(QScrollArea):
         )
 
     def stop(self, *, manual=True):
+        if self.prefilter.busy:
+            self.prefilter.stop()
+            return
         if self.bulk.busy:
             self.bulk.stop()
             return
@@ -849,6 +863,7 @@ class RobloxPanel(QScrollArea):
             )
 
     def shutdown(self):
+        self.prefilter.shutdown()
         self.bulk.shutdown()
         self.result_query.shutdown()
         self.closing = True
