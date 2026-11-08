@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .platform_workspace import ReadableColumns
+from .platform_workspace import ReadableColumns, ResultsPresentation
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController, choice
 from .result_search import CLASSES, ResultSearch, SearchCancelled
 from .roblox import LABELS as ROBLOX_LABELS
@@ -58,6 +58,8 @@ class SavedResultsDialog(QDialog):
         )
         self.columns = ReadableColumns(self.table, window.fill_table)
         self.table.setMinimumHeight(140)
+        self.results_presentation = ResultsPresentation(self.table, (0, 1, 2), "Roblox / X")
+        layout.addWidget(self.results_presentation)
         layout.addWidget(self.table, 1)
         self.page_label = QLabel()
         self.page_label.setWordWrap(True)

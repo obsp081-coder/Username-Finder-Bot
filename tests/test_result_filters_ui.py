@@ -82,6 +82,7 @@ def test_unified_scope_page_export_and_early_close(window, qtbot, tmp_path, monk
     qtbot.addWidget(dialog)
     dialog.show()
     qtbot.waitUntil(lambda: len(dialog.rows) == 100)
+    dialog.results_presentation.mode.setCurrentIndex(1)
     for column in range(dialog.table.columnCount()):
         assert dialog.table.columnWidth(column) >= dialog.table.sizeHintForColumn(column)
     assert "484" in dialog.page_label.text()
@@ -105,7 +106,7 @@ def test_unified_scope_page_export_and_early_close(window, qtbot, tmp_path, monk
     assert not dialog.next_button.isEnabled()
     dialog.reject()
     assert dialog.query.closed and dialog.export_cancel.is_set()
-    assert window.tabs.currentWidget() is window.job_manager
+    assert window.tabs.currentWidget() is window.dashboard
 
 
 def test_real_large_query_keeps_event_loop_responsive(window, qtbot, monkeypatch):

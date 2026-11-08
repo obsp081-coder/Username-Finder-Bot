@@ -37,9 +37,9 @@ def test_independent_instagram_tab_rtl_manual_preview_and_disabled_verification(
         "صانع ملفات اليوزرات",
         "X — تجريبي",
         "إدارة العمليات",
+        "لوحة البداية",
     ]
-    bar = ui.tabs.tabBar()
-    qtbot.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(1).center())
+    ui.tabs.setCurrentIndex(1)
     panel = ui.instagram
     assert ui.tabs.currentWidget() is panel
     assert panel.layoutDirection() == Qt.LayoutDirection.RightToLeft

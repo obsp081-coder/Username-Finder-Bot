@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
@@ -42,6 +43,7 @@ class JobManagerPanel(QWidget):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.summary = QLabel()
+        self.summary.setObjectName("metric")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
         self.search_results_button = QPushButton("بحث موحّد في نتائج Roblox وX المحفوظة…")
@@ -76,21 +78,23 @@ class JobManagerPanel(QWidget):
         self.details.setTextFormat(Qt.TextFormat.PlainText)
         self.details.setWordWrap(True)
         layout.addWidget(self.details)
-        actions = QHBoxLayout()
+        actions = QGridLayout()
         self.open_button = QPushButton("فتح المنصة")
         self.start_button = QPushButton("بدء / استئناف المحددة")
         self.stop_button = QPushButton("إيقاف المحددة")
         self.overnight_button = QPushButton("التشغيل الليلي للمحددة")
-        for button, callback in (
-            (self.open_button, self.open_selected),
-            (self.start_button, self.start_selected),
-            (self.stop_button, self.stop_selected),
+        for index, (button, callback) in enumerate(
+            (
+                (self.open_button, self.open_selected),
+                (self.start_button, self.start_selected),
+                (self.stop_button, self.stop_selected),
+            )
         ):
             button.clicked.connect(callback)
-            actions.addWidget(button)
+            actions.addWidget(button, 0, index)
         layout.addLayout(actions)
         self.overnight_button.clicked.connect(self.overnight_selected)
-        actions.addWidget(self.overnight_button)
+        actions.addWidget(self.overnight_button, 1, 0, 1, 3)
         pages = QHBoxLayout()
         self.previous_button, self.next_button = QPushButton("السابق"), QPushButton("التالي")
         self.previous_button.clicked.connect(lambda: self.page(-1))

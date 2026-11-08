@@ -205,7 +205,7 @@ def test_independent_file_tab_state_and_shutdown(qtbot, tmp_path, monkeypatch):
     window.timer.stop()
     window.show()
     panel = window.file_search
-    assert window.tabs.count() == 7 and window.tabs.tabText(2) == "البحث داخل الملفات"
+    assert window.tabs.count() == 8 and window.tabs.tabText(2) == "البحث داخل الملفات"
     assert window.tabs.tabText(1) == "Instagram"
     original = window.editor_signature()
     window.tabs.setCurrentWidget(panel)

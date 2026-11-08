@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .platform_workspace import ResultsPresentation
 from .roblox_bulk import BulkExperiment
 
 LABELS = {
@@ -101,6 +102,8 @@ class BulkPanel(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setMinimumHeight(160)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.results_presentation = ResultsPresentation(self.table, (0, 1), "Bulk · دليل حسابات")
+        layout.addWidget(self.results_presentation)
         layout.addWidget(self.table)
         for label in (warning, self.identity, self.status, self.counters):
             label.setMinimumWidth(0)

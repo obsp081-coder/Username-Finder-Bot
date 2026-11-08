@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from .overnight_ui import OvernightControls
-from .platform_workspace import PlatformWorkspace, ReadableColumns, generation_fields
+from .platform_workspace import PlatformWorkspace, ReadableColumns, ResultsPresentation, generation_fields
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
@@ -136,7 +136,9 @@ class RobloxPanel(QScrollArea):
         self.workspace.currentChanged.connect(lambda _: self.queue_refresh())
         self.overnight = OvernightControls(self, "Roblox")
         history_layout.addWidget(self.overnight)
-        layout = input_layout
+        input_card = QGroupBox("إعداد فحص فردي · نتائج تسجيل أولية")
+        input_layout.addWidget(input_card)
+        layout = QVBoxLayout(input_card)
         self.modes = QTabWidget()
         generated = QWidget()
         form = QVBoxLayout(generated)
@@ -223,7 +225,7 @@ class RobloxPanel(QScrollArea):
         for i, widget in enumerate(
             (self.preview_button, self.start_button, self.stop_button, self.resume_button)
         ):
-            actions.addWidget(widget, i // 2, i % 2)
+            actions.addWidget(widget, 0, i)
         self.individual_actions = QWidget()
         self.individual_actions.setLayout(actions)
         root_layout.addWidget(self.individual_actions)
@@ -270,11 +272,9 @@ class RobloxPanel(QScrollArea):
         filters.addWidget(self.search, 1)
         layout.addLayout(filters)
         self.changes_only = QCheckBox("الأسماء التي تغير آخر تصنيف لها فقط")
-        layout.addWidget(self.changes_only)
         self.advanced_filters = AdvancedResultFilters(
             "Roblox", self.search, self.class_filter, self.changes_only
         )
-        layout.addWidget(self.advanced_filters)
         self.result_table = make_table(
             ["اسم المستخدم", "التصنيف الأولي", "كود API", "آخر فحص", "الفحوص المكتملة", "التغيير", "المصدر"]
         )
@@ -286,6 +286,8 @@ class RobloxPanel(QScrollArea):
         self.advanced_filters.changed.connect(self.filter_changed)
         self.advanced_filters.cancel_button.clicked.connect(lambda: self.result_query.cancel())
         self.result_table.cellDoubleClicked.connect(lambda *_: self.show_history())
+        self.results_presentation = ResultsPresentation(self.result_table, (0, 1), "Roblox")
+        layout.addWidget(self.results_presentation)
         layout.addWidget(self.result_table)
         pages = QHBoxLayout()
         self.previous_button = self._button("السابق", lambda: self.page(-1))
@@ -295,6 +297,8 @@ class RobloxPanel(QScrollArea):
         pages.addWidget(self.page_label, 1)
         pages.addWidget(self.next_button)
         layout.addLayout(pages)
+        layout.addWidget(self.changes_only)
+        layout.addWidget(self.advanced_filters)
         self.export_history = QCheckBox("تضمين جميع الملاحظات التاريخية في التصدير")
         self.export_history.setToolTip("عند تفعيله: تطبق الشروط على كل ملاحظة تاريخية بنفسها.")
         self.export_button = self._button("تصدير CSV حسب التصفية…", self.export)

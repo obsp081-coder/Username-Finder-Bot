@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .osintgram_ui import OsintgramPanel
+from .platform_workspace import ResultsPresentation
 
 
 def normalize_username(value: str) -> str:
@@ -265,6 +266,8 @@ class InstagramPanel(QScrollArea):
         self.result_table.setMinimumHeight(140)
         self.result_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
         self.result_table.setAccessibleName("نتائج Instagram المستقلة")
+        self.results_presentation = ResultsPresentation(self.result_table, (0, 1), "Instagram")
+        results_layout.addWidget(self.results_presentation)
         results_layout.addWidget(self.result_table, 1)
         self.results_empty = QLabel("لا توجد نتائج تحقق بعد.\nتظهر نتائج الفحص هنا عند تفعيل موفر موثوق.")
         self.results_empty.setObjectName("igHint")
@@ -280,21 +283,6 @@ class InstagramPanel(QScrollArea):
         body_layout.addWidget(self.analysis, 1)
         self.analysis.hide()
         self.modes.currentChanged.connect(self._mode_changed)
-        self.setStyleSheet("""
-            QGroupBox { padding: 10px; margin-top: 12px; border-color: #dcd8e4; }
-            QGroupBox::title { color: #654879; }
-            QLabel#igTitle { font-size: 22px; font-weight: bold; color: #684581; }
-            QLabel#igSubtitle, QLabel#igHint { font-size: 14px; color: #59677a; }
-            QLabel#igStatus { background: #fff3d7; color: #71521d;
-                border: 1px solid #ead8ac; border-radius: 6px; padding: 6px 10px; font-size: 14px; }
-            QLabel#igFileEmpty { background: #f8f7fb; color: #59677a;
-                border: 1px solid #e6e1ed; border-radius: 5px; padding: 8px; font-size: 14px; }
-            QLabel#igCounter { background: #faf9fc; color: #344258;
-                border: 1px solid #e2dce9; border-radius: 6px; padding: 4px; font-size: 15px; }
-            QPushButton#igPreview { background: #f4eff9; color: #654879; border-color: #cbbbd9; }
-            QPushButton#igPreview:hover { background: #eae0f4; }
-            QTableWidget#igResultsTable QHeaderView::section { padding: 6px 8px; }
-        """)
         self.setWidget(content)
         self._input_columns = self._counter_columns = 0
         self._reflow()
@@ -317,7 +305,7 @@ class InstagramPanel(QScrollArea):
 
     def _reflow(self):
         width = min(self.viewport().width() - 24, 1240)
-        columns = 2 if width >= 980 else 1
+        columns = 2 if width >= 880 else 1
         if columns != self._input_columns:
             self._input_columns = columns
             for index, group in enumerate((self.manual_group, self.txt_group)):

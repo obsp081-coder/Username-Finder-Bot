@@ -269,7 +269,7 @@ def test_simultaneous_sqlite_writes_preserve_every_unique_result(concurrent_wind
 
 def test_workspace_navigation_supported_sizes_and_scrolling(concurrent_window, qtbot, tmp_path):
     window, _, _, _, _ = concurrent_window
-    assert window.tabs.count() == 7
+    assert window.tabs.count() == 8
     assert window.job_manager.layoutDirection() == Qt.LayoutDirection.RightToLeft
     if os.environ.get("UFB_SCREENSHOTS"):
         print("GUI_DPR=" + str(window.devicePixelRatioF()))
@@ -304,7 +304,7 @@ def test_workspace_navigation_supported_sizes_and_scrolling(concurrent_window, q
 
 def test_landing_page_and_compact_fields(concurrent_window, qtbot):
     window, _, _, _, _ = concurrent_window
-    assert window.tabs.currentWidget() is window.job_manager
+    assert window.tabs.currentWidget() is window.dashboard
     for size in ((900, 650), (1180, 850), (1500, 1000)):
         window.resize(*size)
         for panel in (window.roblox, window.x_panel):

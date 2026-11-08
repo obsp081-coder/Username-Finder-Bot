@@ -57,13 +57,13 @@ def test_gui_all_tabs_create_start_results_and_reload(qtbot, tmp_path, monkeypat
     reopened.close()
 
 
-def test_default_manager_with_empty_history_and_restored_job(qtbot, tmp_path):
+def test_default_dashboard_with_empty_history_and_restored_job(qtbot, tmp_path):
     path = tmp_path / "landing.db"
     window = MainWindow(path)
     qtbot.addWidget(window)
     window.show()
-    assert window.tabs.currentWidget() is window.job_manager
-    assert window.job_manager.empty.isVisible()
+    assert window.tabs.currentWidget() is window.dashboard
+    assert not window.job_manager.empty.isHidden()
     assert not window.job_manager.start_button.isEnabled()
     config = SearchConfig(filters=Filters(3, 3), limit=5)
     job = window.store.create_job(config, make_snapshot(config))
@@ -72,7 +72,7 @@ def test_default_manager_with_empty_history_and_restored_job(qtbot, tmp_path):
     reopened = MainWindow(path)
     qtbot.addWidget(reopened)
     assert reopened.current_job == job
-    assert reopened.tabs.currentWidget() is reopened.job_manager
+    assert reopened.tabs.currentWidget() is reopened.dashboard
     assert not reopened.is_running()
     reopened.close()
 

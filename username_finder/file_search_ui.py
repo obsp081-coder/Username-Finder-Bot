@@ -196,13 +196,6 @@ class FileSearchPanel(QScrollArea):
         super().__init__(parent)
         self.setWidgetResizable(True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setStyleSheet("""
-            QPlainTextEdit, QTableView { background: white; color: #203047;
-                border: 1px solid #c3cedd; alternate-background-color: #f2f6fb;
-                selection-background-color: #d4e6fc; selection-color: #183f6d; }
-            QPlainTextEdit:focus { border-color: #2463a6; }
-            QTableView::item:selected { background: #d4e6fc; color: #183f6d; }
-        """)
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="file-search")
         self.files = []
         self.task = self.future = None

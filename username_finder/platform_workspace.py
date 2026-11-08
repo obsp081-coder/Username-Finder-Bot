@@ -1,7 +1,60 @@
 """Compact Qt workspaces with independently scrollable platform sections."""
 
-from PySide6.QtCore import QObject, QSize, Qt
-from PySide6.QtWidgets import QGridLayout, QLabel, QScrollArea, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import QObject, QSignalBlocker, QSize, Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .ui_helpers import style_combo_popup
+
+
+class ResultsPresentation(QWidget):
+    """Change visible columns only; never reload, filter, or alter result evidence."""
+
+    def __init__(self, table, simple_columns, platform):
+        super().__init__()
+        self.table = table
+        self.simple_columns = frozenset(simple_columns)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        label = QLabel(platform + " · عرض النتائج")
+        label.setObjectName("heading")
+        layout.addWidget(label)
+        layout.addStretch()
+        self.mode = QComboBox()
+        self.mode.addItems(["بسيط", "متقدم · الدليل والتوقيت"])
+        self.mode.setAccessibleName("طريقة عرض النتائج")
+        self.mode.setToolTip("العرض فقط؛ لا تتغير التصنيفات أو التصفية أو التصدير.")
+        style_combo_popup(self.mode)
+        layout.addWidget(self.mode)
+        self.mode.currentIndexChanged.connect(self.apply)
+        self.apply()
+
+    def apply(self, *_):
+        simple = self.mode.currentIndex() == 0
+        was_simple = bool(self.table.property("simpleResultsView"))
+        visible = [c for c in range(self.table.columnCount()) if not self.table.isColumnHidden(c)]
+        widths = {c: self.table.columnWidth(c) for c in visible[:-1]} if was_simple else {}
+        self.table.setProperty("simpleResultsView", simple)
+        with QSignalBlocker(self.table.horizontalHeader()):
+            self.table.horizontalHeader().setStretchLastSection(simple)
+            for column in range(self.table.columnCount()):
+                self.table.setColumnHidden(column, simple and column not in self.simple_columns)
+                if was_simple and not simple:
+                    columns = getattr(self.table, "readable_columns", None)
+                    width = columns.user_widths.get(column) if columns else None
+                    width = width or widths.get(column)
+                    if width:
+                        self.table.setColumnWidth(column, width)
+                    else:
+                        self.table.resizeColumnToContents(column)
 
 
 def generation_fields(minimum, maximum, quantity):
@@ -31,12 +84,19 @@ class ReadableColumns(QObject):
     def __init__(self, table, fill_table):
         super().__init__(table)
         self.table, self.fill_table = table, fill_table
+        table.readable_columns = self
         self.filling = False
         self.sized = False
         self.user_widths = {}
         table.horizontalHeader().sectionResized.connect(self.resized)
 
     def resized(self, index, old, new):
+        if self.table.isColumnHidden(index):
+            return
+        if self.table.property("simpleResultsView"):
+            visible = [c for c in range(self.table.columnCount()) if not self.table.isColumnHidden(c)]
+            if visible and index == visible[-1]:
+                return  # Stretching a presentation column is not a user resize.
         if not self.filling and self.sized:
             self.user_widths[index] = new
 
@@ -44,7 +104,9 @@ class ReadableColumns(QObject):
         self.filling = True
         try:
             self.fill_table(self.table, rows)
-            self.table.horizontalHeader().setStretchLastSection(False)
+            self.table.horizontalHeader().setStretchLastSection(
+                bool(self.table.property("simpleResultsView"))
+            )
             for column in range(self.table.columnCount()):
                 if column in self.user_widths:
                     self.table.setColumnWidth(column, self.user_widths[column])

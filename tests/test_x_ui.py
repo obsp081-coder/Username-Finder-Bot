@@ -187,7 +187,7 @@ def test_reproduce_ready_20_disabled_by_previous_global_429(window, qtbot):
 def test_navigation_rtl_warnings_and_sizes_without_requests(window, qtbot):
     panel = window.x_panel
     assert window.tabs.tabText(window.tabs.indexOf(panel)) == "X — تجريبي"
-    assert window.tabs.count() == 7
+    assert window.tabs.count() == 8
     assert panel.layoutDirection() == Qt.LayoutDirection.RightToLeft
     assert panel.manual.layoutDirection() == Qt.LayoutDirection.LeftToRight
     assert panel.skip_previous.isChecked()

@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from . import x, x_connection
 from .overnight_ui import OvernightControls
-from .platform_workspace import PlatformWorkspace, ReadableColumns, generation_fields
+from .platform_workspace import PlatformWorkspace, ReadableColumns, ResultsPresentation, generation_fields
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
 from .ui_helpers import local_time, style_combo_popup
@@ -154,7 +154,9 @@ class XPanel(QScrollArea):
         connection_page.addStretch()
         self.overnight = OvernightControls(self, "X")
         history_layout.addWidget(self.overnight)
-        layout = input_layout
+        input_card = QGroupBox("إعداد فحص X التجريبي")
+        input_layout.addWidget(input_card)
+        layout = QVBoxLayout(input_card)
         self.modes = QTabWidget()
         input_hint = QLabel("إعداد إدخال جديد؛ لا يغيّر مصدر العملية المحفوظة المحددة أدناه.")
         input_hint.setWordWrap(True)
@@ -278,7 +280,6 @@ class XPanel(QScrollArea):
         filters.addWidget(self.search)
         layout.addLayout(filters)
         self.advanced_filters = AdvancedResultFilters("X", self.search, self.classification)
-        layout.addWidget(self.advanced_filters)
         self.table = make_table(["اسم X", "التصنيف الأولي", "آخر فحص", "عدد الملاحظات", "التغير", "سبب API"])
         self.table.setMinimumHeight(150)
         self.result_columns = ReadableColumns(self.table, self.fill_table)
@@ -289,6 +290,8 @@ class XPanel(QScrollArea):
         self.classification.currentIndexChanged.connect(self.advanced_filters.update_filters)
         self.search.textChanged.connect(self.advanced_filters.update_filters)
         self.advanced_filters.cancel_button.clicked.connect(lambda: self.result_query.cancel())
+        self.results_presentation = ResultsPresentation(self.table, (0, 1), "X")
+        layout.addWidget(self.results_presentation)
         layout.addWidget(self.table)
         self.page_label = QLabel()
         layout.addWidget(self.page_label)
@@ -302,6 +305,7 @@ class XPanel(QScrollArea):
             ),
         )
         self.export_history = QCheckBox("تضمين جميع الملاحظات التاريخية في التصدير")
+        layout.addWidget(self.advanced_filters)
         self.export_history.setToolTip("عند تفعيله: تطبق الشروط على كل ملاحظة تاريخية بنفسها.")
         layout.addWidget(self.export_history)
         self.setWidget(content)

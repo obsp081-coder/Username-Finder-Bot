@@ -12,12 +12,13 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
+    QGroupBox,
     QLabel,
     QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTextEdit,
@@ -60,12 +61,41 @@ class PrefilterPanel(QWidget):
             "لا يبدأ الفحص الفردي تلقائيًا؛ صدّر ملف مرشحيه واستورده في الوضع الفردي."
         )
         explanation.setWordWrap(True)
+        explanation.setObjectName("simulation")
+        heading = QLabel("تصفية حسابات فقط · لا تثبت إتاحة التسجيل")
+        heading.setWordWrap(True)
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+        root_layout = layout
+        self.steps_area = QScrollArea()
+        self.steps_area.setWidgetResizable(True)
+        self.steps_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.steps_area.setMinimumHeight(90)
+        steps_body = QWidget()
+        layout = QVBoxLayout(steps_body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(explanation)
+        self.steps_area.setWidget(steps_body)
+        root_layout.addWidget(self.steps_area, 1)
+        self.steps = {}
+        for key, title in (
+            ("import", "1 · اختيار الملف واستعادته"),
+            ("config", "2 · إعداد الدفعات والتوقيت"),
+            ("prepare", "3 · تحضير محلي دون اتصال"),
+            ("pilot", "4 · تجربة محدودة بتفويض صريح"),
+            ("review", "5 · مراجعة الدليل والاستعادة"),
+            ("full", "6 · تفويض مستقل لبقية الملف"),
+            ("export", "7 · تصدير الفئات ومرشحي الفردي"),
+        ):
+            card = QGroupBox(title)
+            self.steps[key] = QVBoxLayout(card)
+            layout.addWidget(card)
         self.source = QLineEdit()
         self.source.setReadOnly(True)
         self.source.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        layout.addWidget(self.source)
+        self.steps["import"].addWidget(self.source)
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.delay = QDoubleSpinBox()
         self.delay.setDecimals(3)
         self.delay.setRange(0.001, 86400)
@@ -79,34 +109,45 @@ class PrefilterPanel(QWidget):
         form.addRow("الفاصل بعد الرد (ثانية)", self.delay)
         form.addRow("الأسماء في كل طلب Bulk", self.batch)
         form.addRow("حد التجربة الأولية: أسماء صالحة فريدة", self.pilot_size)
-        layout.addLayout(form)
+        self.steps["config"].addLayout(form)
         self.warning = QLabel("أقل من 10 ثوانٍ تجريبي؛ لم يُثبت استقراره للمسح الطويل.")
         self.warning.setObjectName("simulation")
         self.warning.setWordWrap(True)
         self.delay.valueChanged.connect(lambda v: self.warning.setVisible(v < 10))
         self.warning.hide()
-        layout.addWidget(self.warning)
-        actions = QGridLayout()
+        self.steps["config"].addWidget(self.warning)
         self.buttons = {}
-        for i, (name, label, callback) in enumerate(
-            (
-                ("file", "اختيار TXT / CSV…", self.choose_file),
-                ("open", "فتح عملية محفوظة…", self.open_run),
-                ("prepare", "استيراد ومعاينة محلية", self.prepare),
-                ("inspect", "مراجعة الحالة والدليل", self.inspect),
-                ("pilot", "تفويض / استئناف التجربة المحدودة", lambda: self.start("pilot")),
-                ("full", "تفويض / استئناف الباقي", lambda: self.start("full")),
-                ("stop", "إيقاف وحفظ التقدم", self.stop),
-                ("recover", "استعادة محلية دون إرسال", self.recover),
-                ("review", "مراجعة تسليم غير محسوم", self.review_uncertain),
-                ("export", "تصدير الفئات ومرشحي الفردي…", self.export),
-            )
+        for name, label, callback in (
+            ("file", "اختيار TXT / CSV…", self.choose_file),
+            ("open", "فتح عملية محفوظة…", self.open_run),
+            ("prepare", "استيراد ومعاينة محلية", self.prepare),
+            ("inspect", "مراجعة الحالة والدليل", self.inspect),
+            ("pilot", "تفويض / استئناف التجربة المحدودة", lambda: self.start("pilot")),
+            ("full", "تفويض / استئناف الباقي", lambda: self.start("full")),
+            ("stop", "إيقاف وحفظ التقدم", self.stop),
+            ("recover", "استعادة محلية دون إرسال", self.recover),
+            ("review", "مراجعة تسليم غير محسوم", self.review_uncertain),
+            ("export", "تصدير الفئات ومرشحي الفردي…", self.export),
         ):
             button = QPushButton(label)
             button.clicked.connect(callback)
-            actions.addWidget(button, i // 2, i % 2)
+            step = {
+                "file": "import",
+                "open": "import",
+                "prepare": "prepare",
+                "pilot": "pilot",
+                "inspect": "review",
+                "recover": "review",
+                "review": "review",
+                "full": "full",
+                "export": "export",
+            }.get(name)
+            if step:
+                self.steps[step].addWidget(button)
+            else:
+                root_layout.addWidget(button)
             self.buttons[name] = button
-        layout.addLayout(actions)
+        layout = root_layout
         self.status = QLabel("اختر ملفًا؛ لا طلبات تلقائية.")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -117,7 +158,7 @@ class PrefilterPanel(QWidget):
         self.counts = QLabel()
         self.counts.setWordWrap(True)
         self.counts.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.counts)
+        self.steps["review"].addWidget(self.counts)
         for label in (explanation, self.status, self.counts, self.warning):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setMinimumWidth(0)

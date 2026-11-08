@@ -9,8 +9,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTime, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont
+from PySide6.QtCore import QObject, QSignalBlocker, QSize, Qt, QTime, QTimer, Signal
+from PySide6.QtGui import QCloseEvent, QColor, QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -28,12 +28,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -43,6 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .dashboard_ui import DashboardPanel
 from .domain import Filters, JobState, SearchConfig, normalize
 from .engine import ExecutionEngine
 from .file_generator_ui import FileGeneratorPanel
@@ -50,6 +53,7 @@ from .file_search_ui import FileSearchPanel
 from .generation import GeneratorSpace
 from .instagram_ui import InstagramPanel
 from .job_manager_ui import JobManagerPanel
+from .platform_workspace import ResultsPresentation
 from .presets import file_issues, make_payload, resolve_path, validate_payload
 from .roblox_ui import RobloxPanel
 from .scheduling import ScheduleConfig, Scheduler
@@ -57,6 +61,7 @@ from .snapscore_ui import SnapscorePanel
 from .sources import MeaningLibrary, make_snapshot, preview_txt
 from .storage import Store
 from .ui_helpers import REASONS, WheelGuard, local_time, status_text, style_combo_popup
+from .ui_theme import LIGHT_THEME
 from .x_ui import XPanel
 
 CATEGORIES = {
@@ -134,6 +139,18 @@ class MainWindow(QMainWindow):
         self.resize(1180, 850)
         self.setMinimumSize(880, 650)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        palette = self.palette()
+        for role, color in (
+            (QPalette.ColorRole.Window, "#f5f7fb"),
+            (QPalette.ColorRole.WindowText, "#24344b"),
+            (QPalette.ColorRole.Base, "#ffffff"),
+            (QPalette.ColorRole.AlternateBase, "#f7f9fd"),
+            (QPalette.ColorRole.Text, "#24344b"),
+            (QPalette.ColorRole.Button, "#ffffff"),
+            (QPalette.ColorRole.ButtonText, "#24344b"),
+        ):
+            palette.setColor(role, QColor(color))
+        self.setPalette(palette)
         self.store = Store(database)
         self.store.recover()
         self.current_job: str | None = None
@@ -164,21 +181,48 @@ class MainWindow(QMainWindow):
         self.bridge.failed.connect(self.show_error)
         root = QWidget()
         layout = QVBoxLayout(root)
+        layout.setContentsMargins(12, 10, 12, 0)
+        layout.setSpacing(10)
         title = QLabel("Username Finder Bot")
-        title.setObjectName("title")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header = QHBoxLayout()
+        title.setObjectName("brand")
+        header_widget = QWidget()
+        header_widget.setObjectName("appHeader")
+        header = QHBoxLayout(header_widget)
         header.addWidget(title)
-        banner = QLabel(
-            "محاكاة محلية لـ\u2066Snapchat\u2069 والفحص الحقيقي معطّل • نتائج \u2066Roblox\u2069 أولية"
-        )
+        banner = QLabel("مساحة عمل محلية • نتائج التحقق أولية")
         banner.setWordWrap(True)
         banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(banner, 1)
-        layout.addLayout(header)
+        self.page_heading = QLabel("لوحة البداية")
+        self.page_heading.setObjectName("heading")
+        header.addWidget(self.page_heading)
+        layout.addWidget(header_widget)
         self.tabs = QTabWidget()
         self.tabs.tabBar().setObjectName("platformNavigation")
-        layout.addWidget(self.tabs)
+        self.tabs.tabBar().hide()
+        shell = QHBoxLayout()
+        # RTL puts the first widget on the right; existing page instances and indices remain intact.
+        self.sidebar = QWidget()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(174)
+        side = QVBoxLayout(self.sidebar)
+        side.setContentsMargins(9, 12, 9, 12)
+        label = QLabel("التنقل")
+        label.setObjectName("muted")
+        side.addWidget(label)
+        self.navigation = QListWidget()
+        self.navigation.setObjectName("navigation")
+        self.navigation.setAccessibleName("التنقل بين مساحات العمل")
+        self.navigation.setIconSize(QSize(18, 18))
+        self.navigation.setUniformItemSizes(True)
+        self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        side.addWidget(self.navigation, 1)
+        local = QLabel("بياناتك محلية\nAsia/Riyadh")
+        local.setObjectName("muted")
+        side.addWidget(local)
+        shell.addWidget(self.sidebar)
+        shell.addWidget(self.tabs, 1)
+        layout.addLayout(shell, 1)
         self.setCentralWidget(root)
         self.snapchat_tabs = QTabWidget()
         self.search_tabs = QTabWidget()
@@ -209,56 +253,26 @@ class MainWindow(QMainWindow):
         self.job_manager = JobManagerPanel(self)
         self.tabs.addTab(self.job_manager, "إدارة العمليات")
         self.tabs.currentChanged.connect(lambda _: self.job_manager.refresh_if_visible())
-        self.setStyleSheet("""
-            QMainWindow, QWidget { background: #f4f6f9; color: #203047; font-size: 16px; }
-            QScrollArea { border: none; }
-            QGroupBox QWidget { background: transparent; }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTimeEdit, QListWidget, QTextEdit {
-                background: white; border: 1px solid #c3cedd; border-radius: 5px; padding: 6px; }
-            QComboBox QAbstractItemView { background: #ffffff; color: #203047;
-                selection-background-color: #2463a6; selection-color: #ffffff;
-                border: 1px solid #a7b8cd; padding: 3px; outline: none; }
-            QComboBox QAbstractItemView::item { min-height: 30px; padding: 4px 10px;
-                background: #ffffff; color: #203047; }
-            QComboBox QAbstractItemView::item:hover { background: #e4eef9; color: #163b67; }
-            QComboBox QAbstractItemView::item:selected { background: #2463a6; color: #ffffff; }
-            QComboBox QAbstractItemView::item:focus { border: 1px solid #2463a6; }
-            QComboBox QAbstractItemView::item:disabled { background: #ffffff; color: #66758a; }
-            QPushButton { background: white; border: 1px solid #b8c6d8; border-radius: 5px;
-                padding: 7px 14px; min-height: 20px; }
-            QPushButton:hover { background: #e8eff9; }
-            QPushButton:focus { border: 2px solid #2463a6; padding: 6px 13px; }
-            QPushButton:checked { background: #e2ecfa; }
-            QPushButton#primary { background: #2463a6; color: white; border-color: #2463a6; }
-            QPushButton#primary:disabled { color: #8795a8; background: #e9edf2; border-color: #c3cedd; }
-            QPushButton:disabled { color: #8795a8; background: #e9edf2; }
-            QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #8a9ab0;
-                border-radius: 3px; background: white; }
-            QCheckBox::indicator:checked { background: #2463a6; }
-            QCheckBox::indicator:disabled { background: #e6ebf2; border-color: #c3cedd; }
-            QLineEdit:disabled, QAbstractSpinBox:disabled, QComboBox:disabled {
-                color: #8795a8; background: #edf0f4; }
-            QTabBar::tab { padding: 10px 24px; background: #e6ebf2; }
-            QTabBar::tab:selected { background: white; color: #155b9e; }
-            QTabBar::tab:hover { color: #155b9e; }
-            QTabBar#platformNavigation::tab { padding: 8px 10px; }
-            QTabBar#platformNavigation::tab:selected { border-bottom: 3px solid #2463a6; }
-            QLineEdit:focus, QTextEdit:focus { border-color: #2463a6; }
-            QGroupBox { background: white; border: 1px solid #d1d9e5; border-radius: 7px;
-                margin-top: 14px; padding: 14px; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top right;
-                padding: 0 8px; right: 12px; color: #24578a; }
-            QHeaderView::section { background: #e6edf6; color: #263e5a; padding: 8px; border: none; }
-            QTableWidget { background: white; gridline-color: #e0e6ee; alternate-background-color: #f2f6fb;
-                selection-background-color: #d4e6fc; selection-color: #183f6d; border: 1px solid #d1d9e5; }
-            QLabel#title { font-size: 21px; font-weight: bold; padding: 2px; }
-            QLabel#heading { font-size: 16px; color: #24578a; padding: 8px; }
-            QLabel#metric { background: white; border: 1px solid #d1d9e5; border-radius: 7px; padding: 14px; }
-            QLabel#simulation { background: #fff3d7; color: #71521d; padding: 8px; border-radius: 5px; }
-            QProgressBar { border: 1px solid #c3cedd; text-align: center; min-height: 24px;
-                border-radius: 4px; }
-            QProgressBar::chunk { background: #81b2df; }
-        """)
+        self.dashboard = DashboardPanel(self)
+        self.tabs.addTab(self.dashboard, "لوحة البداية")
+        for index, label, icon in (
+            (7, "لوحة البداية", QStyle.StandardPixmap.SP_ComputerIcon),
+            (3, "Roblox", QStyle.StandardPixmap.SP_DialogApplyButton),
+            (1, "Instagram", QStyle.StandardPixmap.SP_FileDialogContentsView),
+            (0, "سناب", QStyle.StandardPixmap.SP_DialogHelpButton),
+            (5, "X · تجريبي", QStyle.StandardPixmap.SP_MessageBoxInformation),
+            (6, "إدارة العمليات", QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            (4, "صانع اليوزرات", QStyle.StandardPixmap.SP_FileIcon),
+            (2, "البحث في الملفات", QStyle.StandardPixmap.SP_DirOpenIcon),
+        ):
+            item = QListWidgetItem(self.style().standardIcon(icon), label)
+            item.setData(Qt.ItemDataRole.UserRole, index)
+            item.setToolTip(self.tabs.tabText(index))
+            item.setSizeHint(QSize(150, 42))
+            self.navigation.addItem(item)
+        self.navigation.currentRowChanged.connect(self.navigate)
+        self.tabs.currentChanged.connect(self.sync_navigation)
+        self.setStyleSheet(LIGHT_THEME)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.tick)
         self.timer.start(250)
@@ -273,10 +287,23 @@ class MainWindow(QMainWindow):
         unfinished = self.store.latest_unfinished()
         if unfinished:
             self.load_job(unfinished)
-        self.tabs.setCurrentWidget(self.job_manager)
+        self.tabs.setCurrentWidget(self.dashboard)
         from .overnight_ui import schedule_startup_recovery
 
         schedule_startup_recovery(self)
+
+    def navigate(self, row):
+        item = self.navigation.item(row)
+        if item:
+            self.tabs.setCurrentIndex(item.data(Qt.ItemDataRole.UserRole))
+
+    def sync_navigation(self, index):
+        with QSignalBlocker(self.navigation):
+            for row in range(self.navigation.count()):
+                if self.navigation.item(row).data(Qt.ItemDataRole.UserRole) == index:
+                    self.navigation.setCurrentRow(row)
+                    break
+        self.page_heading.setText(self.tabs.tabText(index))
 
     def build_settings(self):
         self.settings_page = QWidget()
@@ -649,6 +676,8 @@ class MainWindow(QMainWindow):
                 "صلاحية الدليل",
             ]
         )
+        self.results_presentation = ResultsPresentation(self.result_table, (0, 1, 2), "Snapchat")
+        layout.addWidget(self.results_presentation)
         layout.addWidget(self.result_table)
         self.result_table.cellDoubleClicked.connect(self.result_details)
         self.result_empty = QLabel("اختر بحثًا لعرض نتائجه. جميع النتائج الحالية محاكاة.")

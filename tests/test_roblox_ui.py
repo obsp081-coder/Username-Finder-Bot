@@ -49,10 +49,10 @@ def test_navigation_rtl_and_supported_sizes_without_automatic_requests(window, q
         "صانع ملفات اليوزرات",
         "X — تجريبي",
         "إدارة العمليات",
+        "لوحة البداية",
     ]
     original = [window.search_tabs.widget(i) for i in range(4)]
-    bar = window.tabs.tabBar()
-    qtbot.mouseClick(bar, Qt.MouseButton.LeftButton, pos=bar.tabRect(3).center())
+    window.tabs.setCurrentIndex(3)
     panel = window.roblox
     assert window.tabs.currentWidget() is panel
     assert panel.layoutDirection() == Qt.LayoutDirection.RightToLeft

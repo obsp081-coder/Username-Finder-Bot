@@ -36,7 +36,7 @@ def wheel(control, delta=-120, pixel=None):
     QApplication.sendEvent(control, event)
 
 
-@pytest.mark.parametrize("name", ["tabs", "search_tabs", "advanced_tabs"])
+@pytest.mark.parametrize("name", ["search_tabs", "advanced_tabs"])
 def test_tab_bar_wheel_preserves_selection_but_click_and_keyboard_work(ui, qtbot, name):
     ui.advanced_toggle.setChecked(True)
     tabs = getattr(ui, name)

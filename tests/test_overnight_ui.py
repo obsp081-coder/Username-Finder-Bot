@@ -147,7 +147,7 @@ def test_shutdown_recovery_and_manual_stop_are_distinct(qtbot, tmp_path, monkeyp
     else:
         qtbot.waitUntil(lambda: reopened.roblox.repo.progress(identity)["state"] == "Completed")
         assert len(calls) == 2 and clock.seconds >= 30
-    assert reopened.tabs.currentWidget() is reopened.job_manager
+    assert reopened.tabs.currentWidget() is reopened.dashboard
     reopened.close()
     qtbot.waitUntil(lambda: reopened.closed)
 
