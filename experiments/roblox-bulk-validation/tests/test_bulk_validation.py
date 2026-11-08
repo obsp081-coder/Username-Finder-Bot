@@ -1395,3 +1395,468 @@ p.run_experiment(path,comparison=True,acknowledge=lambda _: 'RUN '+p.fingerprint
             transport=lambda _: pytest.fail("Never replay uncertain delivery"),
         )
     assert original_bytes(run) == archived and original_bytes(source) == before
+
+
+def expanded_source(root, manifest):
+    pilot = pilot_from_full(root, manifest)
+    archive = root / "random-pilot/runs" / poc.fingerprint(pilot)
+    archive.mkdir(parents=True)
+    poc.write_new(archive / "manifest.json", pilot)
+    return pilot
+
+
+def expanded_ack(manifest):
+    return lambda prompt: ("SAFE " if "Type SAFE" in prompt else "RUN ") + poc.fingerprint(manifest)
+
+
+def expanded_setup(root, manifest):
+    pilot = expanded_source(root, manifest)
+    value = poc.prepare_expanded(root)
+    path = root / "expanded-100"
+    poc.review_manifest(path, expanded=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(value))
+    return path, value, pilot
+
+
+def simulate_expanded(path, value, *, fault=None, clock=None):
+    clock, calls = clock or Clock(), []
+    names = [r["requested_username"] for r in value["candidates"]]
+    active = False
+
+    def transport(request):
+        nonlocal active
+        assert not active
+        active = True
+        calls.append(copy.deepcopy(request))
+        clock.at += 0.125
+        if fault and (result := fault(request, len(calls), names)) is not None:
+            active = False
+            return result
+        result = (
+            response(
+                {
+                    "data": [
+                        record(n, name=n.upper(), id=1000 + names.index(n))
+                        for n in reversed(request["usernames"])
+                    ]
+                }
+            )
+            if request["kind"] == "bulk"
+            else response({"code": 1, "message": "Username is already in use"})
+        )
+        active = False
+        return result
+
+    result = poc.run_experiment(
+        path,
+        expanded=True,
+        acknowledge=expanded_ack(value),
+        transport=transport,
+        monotonic=clock.now,
+        wait=clock.wait,
+    )
+    return result, calls, clock, path / "runs" / poc.fingerprint(value)
+
+
+def test_expanded_uniform_draw_order_exclusions_duplicates_and_frozen_sample(tmp_path, manifest, monkeypatch):
+    pilot = expanded_source(tmp_path, manifest)
+    excluded = [r["requested_username"] for r in pilot["candidates"]]
+    candidates = [f"b{i:03}" for i in range(100)]
+    draws = iter("".join([excluded[0], candidates[0], candidates[0], *candidates[1:]]))
+    calls = []
+
+    def choice(alphabet):
+        assert alphabet == "abcdefghijklmnopqrstuvwxyz0123456789"
+        calls.append(alphabet)
+        return next(draws)
+
+    monkeypatch.setattr(poc.secrets, "choice", choice)
+    value = poc.prepare_expanded(tmp_path)
+    assert [r["requested_username"] for r in value["candidates"]] == candidates
+    assert len(calls) == 408 and not poc.validate_expanded_manifest(value)
+    assert not set(candidates).intersection(excluded)
+    path = tmp_path / "expanded-100"
+    frozen = original_bytes(path)
+    monkeypatch.setattr(poc.secrets, "choice", lambda _: pytest.fail("Never regenerate"))
+    assert poc.prepare_expanded(tmp_path) == value and original_bytes(path) == frozen
+    plan = poc.request_plan(value)
+    assert len(plan) == 105 and [r["kind"] for r in plan] == ["bulk"] * 5 + ["individual"] * 100
+    assert [len(r["usernames"]) for r in plan[:5]] == [20] * 5
+    assert [n for r in plan[:5] for n in r["usernames"]] == candidates
+    assert [r["usernames"][0] for r in plan[5:]] == candidates
+
+
+@pytest.mark.parametrize(
+    "change", ["incomplete", "duplicate", "excluded", "format", "order", "metadata", "ownership"]
+)
+def test_expanded_invalid_or_altered_sample_is_preserved_and_blocks(tmp_path, manifest, change):
+    path, value, pilot = expanded_setup(tmp_path, manifest)
+    if change == "incomplete":
+        value["candidates"].pop()
+    elif change == "duplicate":
+        value["candidates"][0]["requested_username"] = value["candidates"][1]["requested_username"].upper()
+    elif change == "excluded":
+        value["candidates"][0]["requested_username"] = pilot["candidates"][0]["requested_username"]
+    elif change == "format":
+        value["candidates"][0]["requested_username"] = "no!!"
+    elif change == "order":
+        value["candidates"].reverse()
+    elif change == "metadata":
+        value["sample_origin"]["method"] = "unknown"
+    else:
+        value["candidates"][0]["independently_established"] = True
+    (path / "manifest.json").write_bytes(poc.encoded(value))
+    frozen = original_bytes(path)
+    assert poc.validate_expanded_manifest(value)
+    with pytest.raises(ValueError):
+        poc.prepare_expanded(tmp_path)
+    with pytest.raises(ValueError):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: pytest.fail("Invalid sample"))
+    assert original_bytes(path) == frozen and not (path / "runs").exists()
+
+
+def test_expanded_success_all_105_sequential_requests_measured_and_reported(tmp_path, manifest):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    summary, calls, clock, run = simulate_expanded(path, value)
+    names = [r["requested_username"] for r in value["candidates"]]
+    assert len(calls) == summary["maximum_attempts"] == summary["dispatch_intents_including_failures"] == 105
+    assert summary["bulk_requested_usernames"] == summary["individual_attempted_usernames"] == names
+    assert summary["completed_bulk_batches"] == 5
+    assert summary["bulk_preliminary_counts"] == {"Taken": 100}
+    assert summary["individual_preliminary_counts"] == {"Taken": 100}
+    assert summary["taken_api_agreements"] == 100
+    assert clock.waits == [10] * 104
+    assert summary["deliberate_pacing_seconds"] == 1040
+    assert summary["transport_elapsed_seconds"] == pytest.approx(13.125)
+    assert summary["elapsed_seconds_including_pacing"] == pytest.approx(1053.125)
+    assert summary["unattributed_elapsed_seconds"] == 0
+    for kind, count in (("bulk", 5), ("individual", 100)):
+        assert summary["observed_phases"][kind] == {
+            "dispatch_intents": count,
+            "responses": count,
+            "complete_http_responses": count,
+            "http_status_counts": {"200": count},
+        }
+        assert summary["latency_seconds"][kind] == {
+            "count": count,
+            "mean": 0.125,
+            "median": 0.125,
+            "p95": 0.125,
+        }
+    savings = summary["hypothetical_bulk_first"]
+    assert savings["available"] and savings["potential_individual_requests_avoided"] == 100
+    assert (
+        savings["hypothetical_total_requests"] == 5
+        and savings["estimated_request_count_reduction_percent"] == 95
+    )
+    assert savings["sustained_throughput_estimate"] is None and not savings["independent_accuracy_verified"]
+    with next(run.glob("comparison-*.csv")).open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [r["username"] for r in rows] == names
+    assert [int(r["bulk_lookup_attempt"]) for r in rows] == [i // 20 + 1 for i in range(100)]
+    events, warnings = poc.read_events(run / "events.jsonl")
+    assert not warnings and events[0]["safety_acknowledgment"] == "SAFE " + poc.fingerprint(value)
+    assert all(
+        e["bulk_parameters"]["excludeBannedUsers"] is False
+        for e in events
+        if e["event"] == "request_intent" and e["request"]["kind"] == "bulk"
+    )
+
+
+def test_expanded_unresolved_cases_and_all_individual_classes_are_distinguished(tmp_path, manifest):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+
+    def fault(request, attempt, names):
+        if attempt == 1:
+            rows = [record(n, id=1000 + names.index(n)) for n in request["usernames"] if n != names[2]]
+            rows[0]["name"] = "renamed_account"
+            rows[1]["name"] = "roblox_user_12345678901"
+            rows[2]["name"] = "another_name"
+            return response({"data": rows})
+        if request["kind"] == "individual" and request["usernames"][0] in names[:4]:
+            return response(
+                {"code": [1, 12, 2, 0][names.index(request["usernames"][0])], "message": "Synthetic response"}
+            )
+
+    summary, calls, _, _ = simulate_expanded(path, value, fault=fault)
+    assert len(calls) == 105 and summary["stop_reason"] == "completed"
+    assert summary["bulk_preliminary_counts"] == {"Unresolved": 4, "Taken": 96}
+    assert summary["classification_comparisons"] == {
+        "TakenApiAgreement": 96,
+        "UnresolvedBulk_IndividualTaken": 1,
+        "UnresolvedBulk_IndividualReserved": 1,
+        "UnresolvedBulk_IndividualInvalid": 1,
+        "UnresolvedBulk_IndividualAvailable": 1,
+    }
+    assert (
+        len(summary["missing_bulk_records"]) == 1
+        and len(summary["historical_or_different_current_names"]) == 3
+    )
+    assert not summary["contradictions"]
+    assert summary["hypothetical_bulk_first"]["hypothetical_total_requests"] == 9
+
+
+@pytest.mark.parametrize(
+    "kind", ["same_id", "same_current", "duplicate", "unrequested", "bad_type", "malformed"]
+)
+def test_expanded_conflicts_within_and_across_batches_stop_before_individuals(tmp_path, manifest, kind):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+
+    def fault(request, attempt, names):
+        if attempt != 2:
+            return None
+        rows = [record(n, id=1000 + names.index(n)) for n in request["usernames"]]
+        if kind == "same_id":
+            rows[0]["id"] = 1000
+        elif kind == "same_current":
+            rows[0]["name"] = names[0]
+        elif kind == "duplicate":
+            rows.append(rows[0])
+        elif kind == "unrequested":
+            rows.append(record(names[0], id=1000))
+        elif kind == "bad_type":
+            rows[0]["id"] = True
+        else:
+            return response(body=b'{"data":[],"data":[]}')
+        return response({"data": rows})
+
+    summary, calls, _, _ = simulate_expanded(path, value, fault=fault)
+    assert len(calls) == 2 and all(r["kind"] == "bulk" for r in calls)
+    assert summary["stop_reason"] != "completed" and summary["individual_preliminary_counts"] == {
+        "NotObserved": 100
+    }
+    assert not summary["hypothetical_bulk_first"]["available"]
+    assert summary["hypothetical_bulk_first"]["estimated_request_count_reduction_percent"] is None
+    if kind in ("same_id", "same_current"):
+        assert summary["stop_reason"].startswith("cross_batch_conflicting_")
+        assert value["candidates"][0]["requested_username"] in summary["bulk_evidence_conflicted_usernames"]
+        assert summary["comparison_conclusion_counts"] == {"Unknown": 100}
+
+
+@pytest.mark.parametrize("attempt", [1, 6])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        response(status=401),
+        response(status=403),
+        response(status=429),
+        response(status=500),
+        response(headers={"content-type": "application/json", "retry-after": "90"}),
+        response(headers={"content-type": "application/json", "x-ratelimit-remaining": "0"}),
+        response(challenge=True),
+        response(complete=False),
+        response(error="timeout"),
+        response(body=b"{"),
+        response({"code": 999, "message": "Unknown"}),
+    ],
+)
+def test_expanded_restrictions_and_unsafe_responses_stop_at_each_phase(tmp_path, manifest, attempt, fault):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    summary, calls, _, run = simulate_expanded(
+        path, value, fault=lambda r, a, n: fault if a == attempt else None
+    )
+    assert len(calls) == summary["dispatch_intents_including_failures"] == attempt
+    assert summary["stop_reason"] != "completed"
+    assert not summary["hypothetical_bulk_first"]["available"]
+    frozen = original_bytes(run)
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            expanded=True,
+            acknowledge=expanded_ack(value),
+            transport=lambda _: pytest.fail("Never retry a stopped experiment"),
+        )
+    assert original_bytes(run) == frozen
+
+
+def test_expanded_individual_contradiction_preserves_sources_and_stops(tmp_path, manifest):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    summary, calls, _, run = simulate_expanded(
+        path,
+        value,
+        fault=lambda r, a, n: response({"code": 0, "message": "Username is valid"}) if a == 6 else None,
+    )
+    assert len(calls) == 6 and summary["contradictions"]
+    assert summary["individual_preliminary_counts"] == {"Available": 1, "NotObserved": 99}
+    assert summary["classification_comparisons"] == {"Conflict": 1, "NotCompared": 99}
+    assert summary["comparison_conclusion_counts"] == {"Unknown": 100}
+    events, _ = poc.read_events(run / "events.jsonl")
+    assert len([e for e in events if e["event"] == "response"]) == 6
+    assert summary["hypothetical_bulk_first"]["potential_individual_requests_avoided"] is None
+
+
+def test_expanded_raised_transport_error_records_actual_elapsed_not_default_zero(tmp_path, manifest):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+
+    def fault(request, attempt, names):
+        raise TimeoutError("Synthetic timeout")
+
+    summary, calls, _, _ = simulate_expanded(path, value, fault=fault)
+    assert len(calls) == 1 and summary["stop_reason"] == "transport_exception_TimeoutError"
+    assert summary["latency_seconds"]["bulk"]["mean"] == 0.125
+    assert summary["transport_elapsed_seconds"] == 0.125
+    assert summary["observed_phases"]["bulk"]["complete_http_responses"] == 0
+
+
+def test_expanded_budget_and_request_order_guard(tmp_path, manifest, monkeypatch):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    original_plan = poc.request_plan
+    plan = poc.request_plan(value)
+    monkeypatch.setattr(poc, "request_plan", lambda _: plan)
+
+    def append_after_preflight(request, attempt, names):
+        if attempt == 105:
+            plan.append(copy.deepcopy(plan[-1]))
+
+    summary, calls, _, _ = simulate_expanded(path, value, fault=append_after_preflight)
+    assert len(calls) == 105 and summary["stop_reason"] == "request_budget_exhausted"
+    second = tmp_path / "second"
+    second.mkdir()
+    second_path, second_value, _ = expanded_setup(second, manifest)
+    with pytest.raises(ValueError, match="budget"):
+        poc.run_experiment(
+            second_path,
+            expanded=True,
+            acknowledge=expanded_ack(second_value),
+            transport=lambda _: pytest.fail("106 requests must fail before dispatch"),
+        )
+    assert not (second_path / "runs").exists()
+    # Same plan length and kinds, but a duplicated individual name must also stop.
+    second_plan = original_plan(second_value)
+    second_plan[6] = copy.deepcopy(second_plan[5])
+    monkeypatch.setattr(poc, "request_plan", lambda _: second_plan)
+    summary, calls, _, _ = simulate_expanded(second_path, second_value)
+    assert len(calls) == 6 and summary["stop_reason"] == "unexpected_expanded_request_plan"
+
+
+def test_expanded_source_and_postreview_manifest_changes_block_before_dispatch(tmp_path, manifest):
+    with pytest.raises(FileNotFoundError):
+        poc.prepare_expanded(tmp_path)
+    assert not (tmp_path / "expanded-100").exists()
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    value["note"] = "A valid but unreviewed manifest change"
+    (path / "manifest.json").write_bytes(poc.encoded(value))
+    with pytest.raises(FileNotFoundError):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: pytest.fail("Review must bind changes"))
+    poc.review_manifest(path, expanded=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(value))
+    source = tmp_path / "random-pilot/manifest.json"
+    pilot = poc.read_json(source)
+    pilot["note"] = "Source no longer matches the archived pilot"
+    source.write_bytes(poc.encoded(pilot))
+    with pytest.raises((ValueError, FileNotFoundError)):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: pytest.fail("Changed exclusion source"))
+    assert not (path / "runs").exists()
+
+
+def test_expanded_timing_separates_journal_overhead_from_transport_and_waits(tmp_path, manifest, monkeypatch):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    clock = Clock()
+    original_append = poc.Journal.append
+
+    def disk_cost(journal, event):
+        clock.at += 0.01
+        original_append(journal, event)
+
+    monkeypatch.setattr(poc.Journal, "append", disk_cost)
+    summary, _, _, _ = simulate_expanded(path, value, clock=clock)
+    assert summary["transport_elapsed_seconds"] == pytest.approx(13.125)
+    assert summary["deliberate_pacing_seconds"] < 1040
+    assert summary["unattributed_elapsed_seconds"] > 0
+    assert min(summary["measured_post_response_gaps_seconds"]) >= 10 - 1e-8
+    assert summary["elapsed_seconds_including_pacing"] == pytest.approx(
+        summary["transport_elapsed_seconds"]
+        + summary["deliberate_pacing_seconds"]
+        + summary["unattributed_elapsed_seconds"]
+    )
+
+
+def test_expanded_cancellation_during_pacing_is_durable_and_does_not_reset(tmp_path, manifest):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+
+    class CancelClock(Clock):
+        def wait(self, seconds):
+            self.at += 0.75
+            return True
+
+    summary, calls, _, run = simulate_expanded(path, value, clock=CancelClock())
+    assert len(calls) == 1 and summary["stop_reason"] == "cancelled_during_pacing"
+    assert summary["deliberate_pacing_seconds"] == 0.75
+    assert summary["transport_elapsed_seconds"] == 0.125
+    assert summary["elapsed_seconds_including_pacing"] == 0.875
+    frozen = original_bytes(run)
+    value["note"] = "New review notes cannot reset the lifetime experiment limit"
+    (path / "manifest.json").write_bytes(poc.encoded(value))
+    poc.review_manifest(path, expanded=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(value))
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(path, expanded=True, acknowledge=expanded_ack(value))
+    assert original_bytes(run) == frozen
+
+
+def test_expanded_offline_cli_and_distinct_review_safety_and_run_confirmations(
+    tmp_path, manifest, monkeypatch, capsys
+):
+    pilot = expanded_source(tmp_path, manifest)
+    original = {str(p): p.read_bytes() for p in (tmp_path / "random-pilot").rglob("*") if p.is_file()}
+    monkeypatch.setattr(poc, "DATA", tmp_path)
+    assert poc.main(["--expanded-100"]) == 0
+    assert poc.main(["prepare", "--expanded-100"]) == 0
+    assert poc.main(["status", "--expanded-100"]) == 0
+    assert '"maximum_attempts": 105' in capsys.readouterr().out
+    path = tmp_path / "expanded-100"
+    value = poc.read_json(path / "manifest.json")
+    with pytest.raises(FileNotFoundError):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: pytest.fail("No new review yet"))
+    with pytest.raises(ValueError, match="acknowledged"):
+        poc.review_manifest(path, expanded=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(pilot))
+    poc.review_manifest(path, expanded=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(value))
+    with pytest.raises(ValueError, match="safety"):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: "RUN " + poc.fingerprint(value))
+    with pytest.raises(ValueError, match="Live execution not acknowledged"):
+        poc.run_experiment(path, expanded=True, acknowledge=lambda _: "SAFE " + poc.fingerprint(value))
+    assert not (path / "runs").exists()
+    assert {str(p): p.read_bytes() for p in (tmp_path / "random-pilot").rglob("*") if p.is_file()} == original
+    # Report stays offline and preserves the existing journal and user's worksheet.
+    summary, _, _, run = simulate_expanded(path, value)
+    journal = (run / "events.jsonl").read_bytes()
+    worksheet = (run / "manual_comparison.csv").read_bytes()
+    assert poc.main(["report", "--expanded-100"]) == 0
+    assert summary["mode"] == poc.EXPANDED_MODE
+    assert (run / "events.jsonl").read_bytes() == journal
+    assert (run / "manual_comparison.csv").read_bytes() == worksheet
+
+
+@pytest.mark.parametrize("crash_at", ["dispatch", "wait"])
+def test_expanded_process_crash_has_honest_partial_timings_and_no_replay(tmp_path, manifest, crash_at):
+    path, value, _ = expanded_setup(tmp_path, manifest)
+    code = """
+import importlib.util, os, pathlib, socket, sqlite3, sys
+spec=importlib.util.spec_from_file_location('experiment',sys.argv[1])
+p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+def forbidden(*a, **k): raise AssertionError('No live network or database')
+socket.socket.connect=forbidden;sqlite3.connect=forbidden
+path=pathlib.Path(sys.argv[2]);m=p.read_json(path/'manifest.json')
+def ack(prompt): return ('SAFE ' if 'Type SAFE' in prompt else 'RUN ')+p.fingerprint(m)
+def transport(request):
+    if sys.argv[3]=='dispatch': os._exit(73)
+    return p.protocol.Response(status=200,body=b'{"data":[]}',headers={'content-type':'application/json'})
+p.run_experiment(path,expanded=True,acknowledge=ack,transport=transport,wait=lambda _: os._exit(73))
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code, str(SCRIPT), str(path), crash_at], capture_output=True, timeout=15
+    )
+    assert result.returncode == 73, result.stderr.decode(errors="replace")
+    run = path / "runs" / poc.fingerprint(value)
+    summary = poc.report_run(run)
+    assert summary["elapsed_seconds_including_pacing"] is None
+    assert summary["dispatch_intents_including_failures"] == 1
+    assert summary["stop_reason"] == "interrupted_no_durable_stop"
+    assert summary["hypothetical_bulk_first"]["estimated_request_count_reduction_percent"] is None
+    if crash_at == "dispatch":
+        assert summary["transport_elapsed_seconds"] is None
+        assert summary["dispatches_without_timing"] == [1]
+        assert summary["unanswered_delivery_uncertain_attempts"] == [1]
+    else:
+        assert summary["deliberate_pacing_seconds"] is None and summary["unfinished_pacing_ids"]
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path, expanded=True, acknowledge=expanded_ack(value), transport=lambda _: pytest.fail("No replay")
+        )

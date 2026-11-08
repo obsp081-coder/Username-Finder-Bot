@@ -38,6 +38,8 @@ MAX_REQUESTS = 42
 PILOT_MODE = "RANDOM_BULK_PILOT"
 PILOT_MAX_REQUESTS = 21
 COMPARISON_MODE = "SAVED_BULK_INDIVIDUAL_COMPARISON"
+EXPANDED_MODE = "EXPANDED_100"
+EXPANDED_MAX_REQUESTS = 105
 BULK_POLICY = "bulk-current-name-v2-bounded-account-names"
 BATCH_SIZE = 20
 PACE_SECONDS = 10.0
@@ -276,6 +278,121 @@ def validate_pilot_manifest(manifest):
     return []
 
 
+def exclusion_pilot(root):
+    manifest = read_json(Path(root) / "random-pilot" / "manifest.json")
+    if validate_pilot_manifest(manifest):
+        raise ValueError("A valid original 20-name pilot is required for exclusion")
+    archived = read_json(Path(root) / "random-pilot/runs" / fingerprint(manifest) / "manifest.json")
+    if archived != manifest:
+        raise ValueError("Original pilot and archived manifest differ; preserve evidence and review manually")
+    return manifest
+
+
+def validate_expanded_manifest(manifest):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("mode") != EXPANDED_MODE
+        or type(manifest.get("version")) is not int
+        or manifest["version"] != 1
+    ):
+        return ["Expected an EXPANDED_100 version 1 manifest"]
+    rows, origin = manifest.get("candidates"), manifest.get("sample_origin")
+    if not isinstance(rows, list) or len(rows) != 100 or not isinstance(origin, dict):
+        return ["Expanded sample requires exactly 100 frozen random candidates and generation metadata"]
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not valid_name(row.get("requested_username"))
+            or len(row["requested_username"]) != 4
+            or row.get("category") != "random"
+            or row.get("independently_established") is not False
+            or row.get("expected_user_id") is not None
+            or row.get("expected_current_username") != ""
+            or any(
+                not isinstance(row.get(k), str) for k in ("evidence_reference", "hypothesis", "limitations")
+            )
+        ):
+            return ["Expanded candidates must be valid random four-character names without ownership claims"]
+    names = [r["requested_username"] for r in rows]
+    excluded = origin.get("excluded_usernames")
+    if (
+        len({key(n) for n in names}) != 100
+        or not isinstance(excluded, list)
+        or len(excluded) != 20
+        or not all(valid_name(n) and len(n) == 4 for n in excluded)
+        or len({key(n) for n in excluded}) != 20
+        or {key(n) for n in names}.intersection(key(n) for n in excluded)
+        or origin.get("ordered_usernames_sha256") != digest(encoded(names))
+        or not re.fullmatch(r"[0-9a-f]{64}", str(origin.get("excluded_pilot_sha256", "")))
+        or origin.get("method") != "secrets.choice_uniform_rejection_without_availability"
+        or origin.get("alphabet") != "abcdefghijklmnopqrstuvwxyz0123456789"
+        or origin.get("order") != "accepted_draw_order"
+        or not isinstance(manifest.get("prepared_at_utc"), str)
+    ):
+        return ["Invalid uniqueness, exclusion, generation metadata, or frozen order fingerprint"]
+    return []
+
+
+def expanded_source_binding(path, manifest):
+    source = exclusion_pilot(path.parent)
+    origin = manifest["sample_origin"]
+    if origin["excluded_pilot_sha256"] != fingerprint(source) or origin["excluded_usernames"] != [
+        r["requested_username"] for r in source["candidates"]
+    ]:
+        raise ValueError("Expanded sample exclusion source changed")
+
+
+def prepare_expanded(root):
+    path = Path(root) / "expanded-100"
+    if path.exists():
+        manifest = read_json(path / "manifest.json")
+        errors = validate_expanded_manifest(manifest)
+        if errors:
+            raise ValueError("Existing expanded sample preserved without replacement: " + "; ".join(errors))
+        expanded_source_binding(path, manifest)
+        return manifest
+    source = exclusion_pilot(root)
+    excluded = [r["requested_username"] for r in source["candidates"]]
+    alphabet, rows, seen = "abcdefghijklmnopqrstuvwxyz0123456789", [], {key(n) for n in excluded}
+    while len(rows) < 100:
+        name = "".join(secrets.choice(alphabet) for _ in range(4))
+        if key(name) in seen:
+            continue
+        seen.add(key(name))
+        rows.append(
+            {
+                "requested_username": name,
+                "category": "random",
+                "evidence_reference": "",
+                "expected_current_username": "",
+                "expected_user_id": None,
+                "independently_established": False,
+                "hypothesis": "Uniform local sample excluding prior pilot; no availability-based selection",
+                "limitations": "API agreement does not independently verify ownership or claimability",
+            }
+        )
+    manifest = {
+        "version": 1,
+        "mode": EXPANDED_MODE,
+        "candidates": rows,
+        "prepared_at_utc": utcnow(),
+        "sample_origin": {
+            "method": "secrets.choice_uniform_rejection_without_availability",
+            "alphabet": alphabet,
+            "order": "accepted_draw_order",
+            "excluded_usernames": excluded,
+            "excluded_pilot_sha256": fingerprint(source),
+            "ordered_usernames_sha256": digest(encoded([r["requested_username"] for r in rows])),
+        },
+    }
+    errors = validate_expanded_manifest(manifest)
+    if errors:
+        raise ValueError("Expanded preparation blocked: " + "; ".join(errors))
+    path.mkdir()  # One frozen sample and one lifetime run; never regenerate or replace.
+    write_new(path / "manifest.json", manifest)
+    return manifest
+
+
 def validate_manifest(manifest):
     """No public evidence is fabricated or verified through a network request."""
     errors = []
@@ -349,15 +466,29 @@ def validate_manifest(manifest):
     return errors
 
 
-def manifest_status(manifest, *, pilot=False, comparison=False):
+def manifest_status(manifest, *, pilot=False, comparison=False, expanded=False):
     rows = manifest.get("candidates", []) if isinstance(manifest, dict) else []
     rows = rows if isinstance(rows, list) else []
     return {
         "fingerprint": fingerprint(manifest),
-        "mode": COMPARISON_MODE if comparison else PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
-        "maximum_attempts": 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS,
+        "mode": EXPANDED_MODE
+        if expanded
+        else COMPARISON_MODE
+        if comparison
+        else PILOT_MODE
+        if pilot
+        else "FULL_SEMANTIC_VALIDATION",
+        "maximum_attempts": EXPANDED_MAX_REQUESTS
+        if expanded
+        else 20
+        if comparison
+        else PILOT_MAX_REQUESTS
+        if pilot
+        else MAX_REQUESTS,
         "errors": (
-            validate_comparison_manifest(manifest)
+            validate_expanded_manifest(manifest)
+            if expanded
+            else validate_comparison_manifest(manifest)
             if comparison
             else validate_pilot_manifest(manifest)
             if pilot
@@ -467,6 +598,44 @@ def compare_evidence(candidate, bulk, individual=None):
     ):
         return "bulk_or_documented_current_vs_individual_conflict"
     return ""
+
+
+def cross_batch_conflict(previous, mapping):
+    by_id, by_current = {}, {}
+    for name, value in previous.items():
+        if row := value.get("record"):
+            by_id[row["id"]] = (row["name"].lower(), name)
+            by_current[row["name"].lower()] = (row["id"], name)
+    for name, value in mapping.items():
+        if name in previous:
+            return "cross_batch_duplicate_mapping", [name]
+        if not (row := value.get("record")):
+            continue
+        current, uid = row["name"].lower(), row["id"]
+        if uid in by_id and by_id[uid][0] != current:
+            return "cross_batch_conflicting_account_names", [by_id[uid][1], name]
+        if current in by_current and by_current[current][0] != uid:
+            return "cross_batch_conflicting_account_ids", [by_current[current][1], name]
+    return "", []
+
+
+def measured_wait(wait, seconds, journal, monotonic):
+    identity = str(uuid.uuid4())
+    journal.append({"event": "pacing_intent", "wait_id": identity, "requested_seconds": seconds})
+    started, returned = monotonic(), False
+    try:
+        result = wait(seconds)
+        returned = True
+        return result
+    finally:
+        journal.append(
+            {
+                "event": "pacing_result",
+                "wait_id": identity,
+                "elapsed_seconds": monotonic() - started,
+                "returned_normally": returned,
+            }
+        )
 
 
 def request_plan(manifest):
@@ -833,13 +1002,15 @@ def review_path(path, manifest):
     return path / "reviews" / (fingerprint(manifest) + "-" + protocol_fingerprint()[:16] + ".json")
 
 
-def reviewed_manifest(path=DATA, *, pilot=False, comparison=False):
+def reviewed_manifest(path=DATA, *, pilot=False, comparison=False, expanded=False):
     manifest = read_json(path / "manifest.json")
-    errors = manifest_status(manifest, pilot=pilot, comparison=comparison)["errors"]
+    errors = manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded)["errors"]
     if errors:
         raise ValueError("Manifest incomplete: " + "; ".join(errors))
     if comparison:
         comparison_analysis(path, manifest)
+    if expanded:
+        expanded_source_binding(path, manifest)
     review = read_json(review_path(path, manifest))
     if (
         not isinstance(review, dict)
@@ -851,11 +1022,13 @@ def reviewed_manifest(path=DATA, *, pilot=False, comparison=False):
     return manifest, review
 
 
-def describe(manifest, *, pilot=False, comparison=False):
+def describe(manifest, *, pilot=False, comparison=False, expanded=False):
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
     print(
         json.dumps(
-            manifest_status(manifest, pilot=pilot, comparison=comparison), ensure_ascii=False, indent=2
+            manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded),
+            ensure_ascii=False,
+            indent=2,
         )
     )
     print(
@@ -863,23 +1036,27 @@ def describe(manifest, *, pilot=False, comparison=False):
         if comparison
         else f"Endpoints: POST {BULK_URL}; GET {protocol.ENDPOINT}"
     )
-    limit = 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    limit = manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded)[
+        "maximum_attempts"
+    ]
     print(f"Budget: at most {limit} attempts; sequential; timeout 10s; post-response pacing >=10s.")
     print("Stop on any failure/restriction/ambiguity/conflict; no retries or automatic resume.")
     print("API results are preliminary; no registration, credentials, or production database access.")
     print("Run only with other Roblox checkers stopped and no unresolved provider restriction.")
 
 
-def review_manifest(path=DATA, *, acknowledge=input, pilot=False, comparison=False):
+def review_manifest(path=DATA, *, acknowledge=input, pilot=False, comparison=False, expanded=False):
     path = data_directory(path)
     manifest = read_json(path / "manifest.json")
-    describe(manifest, pilot=pilot, comparison=comparison)
-    errors = manifest_status(manifest, pilot=pilot, comparison=comparison)["errors"]
+    describe(manifest, pilot=pilot, comparison=comparison, expanded=expanded)
+    errors = manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded)["errors"]
     if errors:
         raise ValueError("Review blocked: " + "; ".join(errors))
     if comparison:
         analysis = comparison_analysis(path, manifest)
         print(json.dumps(analysis, ensure_ascii=False, indent=2))
+    if expanded:
+        expanded_source_binding(path, manifest)
     prompt = (
         "Review saved bulk, derived policy, and new individual-only budget. Type REVIEW <fingerprint>: "
         if comparison
@@ -913,26 +1090,43 @@ def run_experiment(
     monotonic=time.monotonic,
     pilot=False,
     comparison=False,
+    expanded=False,
 ):
     path = data_directory(path)
-    manifest, review = reviewed_manifest(path, pilot=pilot, comparison=comparison)
+    manifest, review = reviewed_manifest(path, pilot=pilot, comparison=comparison, expanded=expanded)
     analysis = comparison_analysis(path, manifest) if comparison else None
-    describe(manifest, pilot=pilot, comparison=comparison)
+    describe(manifest, pilot=pilot, comparison=comparison, expanded=expanded)
+    safety_answer = None
+    if expanded:
+        safety_answer = acknowledge(
+            "Confirm other Roblox checkers are stopped and no provider restrictions remain unresolved. "
+            "Type SAFE <fingerprint>: "
+        )
+        if safety_answer != "SAFE " + fingerprint(manifest):
+            raise ValueError("Live safety conditions not acknowledged")
     answer = acknowledge("Manual live execution only. Type RUN <fingerprint>: ")
     if answer != "RUN " + fingerprint(manifest):
         raise ValueError("Live execution not acknowledged")
     if comparison:
         analysis = comparison_analysis(path, manifest)
+    if expanded:
+        expanded_source_binding(path, manifest)
+        if read_json(path / "manifest.json") != manifest:
+            raise ValueError("Expanded manifest changed during authorization")
     plan = request_plan(manifest)
     if comparison:
         plan = [r for r in plan if r["kind"] == "individual"]
-    limit = 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    limit = manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded)[
+        "maximum_attempts"
+    ]
     if len(plan) > limit:
         raise ValueError("Request budget exceeded before dispatch")
+    if expanded and (len(plan) != 105 or [r["kind"] for r in plan] != ["bulk"] * 5 + ["individual"] * 100):
+        raise ValueError("Expanded plan must contain five bulk and 100 individual requests")
     run_started = monotonic()
     runs = path / "runs"
     # A pilot has one lifetime execution, even if someone edits reviewed metadata.
-    runs.mkdir(exist_ok=not (pilot or comparison))
+    runs.mkdir(exist_ok=not (pilot or comparison or expanded))
     run = runs / fingerprint(manifest)
     run.mkdir()  # Existing evidence, even a crashed intent, permanently blocks implicit replay.
     write_new(run / "manifest.json", manifest)
@@ -945,7 +1139,7 @@ def run_experiment(
             "event": "begin",
             "experiment_id": str(uuid.uuid4()),
             "manifest_sha256": fingerprint(manifest),
-            "mode": COMPARISON_MODE if comparison else PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
+            "mode": manifest_status(manifest, pilot=pilot, comparison=comparison, expanded=expanded)["mode"],
             "maximum_attempts": limit,
             "planned_attempts": len(plan),
             "pacing_seconds": PACE_SECONDS,
@@ -953,6 +1147,11 @@ def run_experiment(
             "experiment_source_sha256": digest(Path(__file__).read_bytes()),
             "individual_protocol_sha256": protocol_fingerprint(),
             "interpretation_policy": BULK_POLICY,
+            **(
+                {"timing_policy": "monotonic-dispatch-and-waits-v1", "safety_acknowledgment": safety_answer}
+                if expanded
+                else {}
+            ),
         }
     )
     cancel = cancel or threading.Event()
@@ -962,6 +1161,7 @@ def run_experiment(
     if comparison:
         bulk_results.update(analysis["corrected_mapping"])
     candidates = {key(r["requested_username"]): r for r in manifest["candidates"]}
+    ordered_names = [r["requested_username"] for r in manifest["candidates"]]
     try:
         for request in plan:
             if comparison and request["kind"] != "individual":
@@ -973,11 +1173,26 @@ def run_experiment(
             if attempts >= limit:
                 stop = "request_budget_exhausted"
                 break
+            if expanded:
+                expected_names = (
+                    ordered_names[attempts * 20 : (attempts + 1) * 20]
+                    if attempts < 5
+                    else [ordered_names[attempts - 5]]
+                )
+                if (
+                    request["kind"] != ("bulk" if attempts < 5 else "individual")
+                    or request["usernames"] != expected_names
+                ):
+                    stop = "unexpected_expanded_request_plan"
+                    break
             while previous_finished is not None:
                 remaining = PACE_SECONDS - (monotonic() - previous_finished)
                 if remaining <= 0:
                     break
-                if wait(remaining) or cancel.is_set():
+                interrupted = (
+                    measured_wait(wait, remaining, journal, monotonic) if expanded else wait(remaining)
+                )
+                if interrupted or cancel.is_set():
                     stop = "cancelled_during_pacing"
                     break
             if stop != "completed":
@@ -1012,6 +1227,7 @@ def run_experiment(
                     ),
                 }
             )
+            transport_started = monotonic()
             try:
                 response = transport(request)
             except KeyboardInterrupt:
@@ -1019,9 +1235,21 @@ def run_experiment(
                 break
             except Exception as exc:
                 response = protocol.Response(
-                    error="transport_exception_" + type(exc).__name__, complete=False
+                    error="transport_exception_" + type(exc).__name__,
+                    complete=False,
+                    elapsed=monotonic() - transport_started if expanded else 0.0,
                 )
-            previous_finished = monotonic()
+            finally:
+                transport_finished = monotonic()
+                if expanded:
+                    journal.append(
+                        {
+                            "event": "dispatch_timing",
+                            "attempt": attempts,
+                            "elapsed_seconds": transport_finished - transport_started,
+                        }
+                    )
+            previous_finished = transport_finished if expanded else monotonic()
             evidence = public_response(response)
             # Raw evidence is durable before interpretation, even if the parser crashes.
             journal.append(
@@ -1034,6 +1262,9 @@ def run_experiment(
                 break
             if request["kind"] == "bulk":
                 mapping, stop = interpret_bulk(request["usernames"], response)
+                conflict_names = []
+                if expanded and not stop:
+                    stop, conflict_names = cross_batch_conflict(bulk_results, mapping)
                 if not stop:
                     for name, bulk in mapping.items():
                         stop = compare_evidence(candidates[name], bulk)
@@ -1047,6 +1278,7 @@ def run_experiment(
                         "stop_reason": stop,
                         "source": "bulk_lookup",
                         "independently_verified": False,
+                        **({"conflicting_username_keys": conflict_names} if expanded else {}),
                     }
                 )
                 bulk_results.update(mapping)
@@ -1103,6 +1335,90 @@ def run_experiment(
     return report_run(run)
 
 
+def expanded_measurements(events, intents, responses, rows, elapsed, warnings):
+    phases = {}
+    for kind in ("bulk", "individual"):
+        attempts = {a for a, e in intents.items() if e["request"]["kind"] == kind}
+        phases[kind] = {
+            "dispatch_intents": len(attempts),
+            "responses": len(attempts & responses.keys()),
+            "complete_http_responses": sum(
+                responses[a]["response"]["complete"] and responses[a]["response"]["status"] is not None
+                for a in attempts & responses.keys()
+            ),
+            "http_status_counts": dict(
+                Counter(str(responses[a]["response"]["status"]) for a in attempts & responses.keys())
+            ),
+        }
+    waits = {e["wait_id"] for e in events if e.get("event") == "pacing_intent"}
+    wait_results = {e["wait_id"]: e for e in events if e.get("event") == "pacing_result"}
+    transport = {e["attempt"]: e for e in events if e.get("event") == "dispatch_timing"}
+    wait_known = sum(e["elapsed_seconds"] for e in wait_results.values())
+    transport_known = sum(e["elapsed_seconds"] for e in transport.values())
+    wait_complete = not warnings and waits == wait_results.keys()
+    transport_complete = not warnings and intents.keys() == transport.keys()
+    stops = [e for e in events if e.get("event") == "stop"]
+    full_comparison = (
+        not warnings
+        and bool(stops)
+        and stops[-1]["reason"] == "completed"
+        and phases["bulk"]["dispatch_intents"] == phases["bulk"]["complete_http_responses"] == 5
+        and phases["individual"]["dispatch_intents"] == phases["individual"]["complete_http_responses"] == 100
+        and all(
+            r["comparison_status"] == "ComparedNoConflict" and r["individual_classification"] in CLASSES[:-1]
+            for r in rows
+        )
+    )
+    saved = sum(r["taken_api_agreement"] for r in rows) if full_comparison else None
+    return {
+        "observed_phases": phases,
+        "completed_bulk_batches": sum(
+            e.get("event") == "bulk_interpretation" and not e.get("stop_reason") for e in events
+        ),
+        "deliberate_pacing_seconds": wait_known if wait_complete else None,
+        "recorded_pacing_seconds_lower_bound": wait_known,
+        "unfinished_pacing_ids": sorted(waits - wait_results.keys()),
+        "transport_elapsed_seconds": transport_known if transport_complete else None,
+        "recorded_transport_seconds_lower_bound": transport_known,
+        "dispatches_without_timing": sorted(intents.keys() - transport.keys()),
+        "unattributed_elapsed_seconds": (
+            max(0.0, elapsed - wait_known - transport_known)
+            if elapsed is not None and wait_complete and transport_complete
+            else None
+        ),
+        "timing_note": (
+            "Monotonic wrapper timings; transport includes I/O and cleanup, not server-only time. "
+            "Pacing excludes journal writes. Incomplete intervals remain unknown."
+        ),
+        "classification_comparisons": dict(Counter(r["comparison_category"] for r in rows)),
+        "bulk_nonconflicting_evidence_counts": dict(
+            Counter(
+                "Unknown"
+                if r["bulk_evidence_conflicted"] or r["bulk_interpretation_stop_reason"]
+                else r["bulk_preliminary_classification"]
+                for r in rows
+            )
+        ),
+        "hypothetical_bulk_first": {
+            "available": full_comparison,
+            "baseline_individual_only_requests": 100,
+            "potential_individual_requests_avoided": saved,
+            "hypothetical_total_requests": 105 - saved if saved is not None else None,
+            "net_requests_saved_vs_individual_only": saved - 5 if saved is not None else None,
+            "estimated_request_count_reduction_percent": float(saved - 5) if saved is not None else None,
+            "assumptions": (
+                "Hypothetical: five bulk requests plus individual checks for non-agreeing names. "
+                "Same observations assumed. Actual experiment checks every name."
+            ),
+            "unavailable_reason": ""
+            if full_comparison
+            else "Incomplete, restricted, or contradictory sample; no sample-wide savings inferred",
+            "sustained_throughput_estimate": None,
+            "independent_accuracy_verified": False,
+        },
+    }
+
+
 def report_run(run):
     manifest = read_json(run / "manifest.json")
     events, warnings = read_events(run / "events.jsonl")
@@ -1127,6 +1443,7 @@ def report_run(run):
         if "conflict" in e.get("stop_reason", ""):
             contradictions.append({"attempt": e["attempt"], "reason": e["stop_reason"]})
             conflicted_names.update(key(n) for n in intents[e["attempt"]]["request"]["usernames"])
+            conflicted_names.update(e.get("conflicting_username_keys", []))
     rows = []
     for candidate in manifest["candidates"]:
         name = key(candidate["requested_username"])
@@ -1171,6 +1488,7 @@ def report_run(run):
                 "bulk_http_status": observed["bulk"].get("status"),
                 "bulk_latency_seconds": observed["bulk"].get("latency_seconds"),
                 "bulk_preliminary_classification": bulk.get("preliminary_classification", "NotObserved"),
+                "bulk_evidence_conflicted": name in conflicted_names,
                 "bulk_reason": bulk.get("reason", ""),
                 "bulk_interpretation_stop_reason": bulk_stop_reasons.get(name, ""),
                 "bulk_record": json.dumps(bulk.get("record"), ensure_ascii=False),
@@ -1201,6 +1519,18 @@ def report_run(run):
                 ),
                 "comparison_conclusion": (
                     "Unknown" if name in conflicted_names else individual.get("classification", "Unknown")
+                ),
+                "comparison_category": (
+                    "Conflict"
+                    if name in conflicted_names
+                    else "NotCompared"
+                    if not individual
+                    else "UnknownIndividual"
+                    if individual["classification"] == "Unknown"
+                    else "TakenApiAgreement"
+                    if bulk.get("preliminary_classification") == "Taken"
+                    and individual["classification"] == "Taken"
+                    else "UnresolvedBulk_Individual" + individual["classification"]
                 ),
                 "independent_manual_classification": "Unknown",
             }
@@ -1275,6 +1605,7 @@ def report_run(run):
         ),
         "journal_warnings": warnings,
         "contradictions": contradictions,
+        "bulk_evidence_conflicted_usernames": [r["username"] for r in rows if r["bulk_evidence_conflicted"]],
         "bulk_preliminary_counts": dict(Counter(r["bulk_preliminary_classification"] for r in rows)),
         "bulk_interpreted_candidates": len(mappings),
         "strict_current_match_percent_of_interpreted": (
@@ -1299,6 +1630,7 @@ def report_run(run):
             k: {
                 "count": len(v),
                 "mean": statistics.mean(v) if v else None,
+                "median": statistics.median(v) if v else None,
                 "p95": sorted(v)[math.ceil(0.95 * len(v)) - 1] if v else None,
             }
             for k, v in latencies.items()
@@ -1322,6 +1654,12 @@ def report_run(run):
             or r["response"]["headers"].get("x-ratelimit-remaining") in ("0", "0.0")
         ],
     }
+    if begin.get("mode") == EXPANDED_MODE:
+        summary.update(
+            expanded_measurements(
+                events, intents, responses, rows, summary["elapsed_seconds_including_pacing"], warnings
+            )
+        )
     # Reports are versioned, never overwrite evidence or a user's manual worksheet.
     identity = str(uuid.uuid4())
     write_new(run / f"report-{identity}.json", summary)
@@ -1379,6 +1717,9 @@ def main(argv=None):
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--pilot", action="store_true", help="Use the separate 20-name RANDOM_BULK_PILOT")
     modes.add_argument(
+        "--expanded-100", action="store_true", help="Use the separate frozen EXPANDED_100 sample"
+    )
+    modes.add_argument(
         "--comparison-source", help="Individual-only follow-up linked to an archived pilot SHA256"
     )
     args = parser.parse_args(argv)
@@ -1387,7 +1728,9 @@ def main(argv=None):
         if comparison and not re.fullmatch(r"[0-9a-f]{64}", args.comparison_source):
             raise ValueError("--comparison-source requires the full source pilot SHA256")
         data_path = (
-            DATA / "individual-comparison" / args.comparison_source
+            DATA / "expanded-100"
+            if args.expanded_100
+            else DATA / "individual-comparison" / args.comparison_source
             if comparison
             else DATA / "random-pilot"
             if args.pilot
@@ -1403,20 +1746,26 @@ def main(argv=None):
             value = reanalyze_pilot(DATA, args.run_id)
         elif args.action == "prepare":
             manifest = (
-                prepare_comparison(DATA, args.comparison_source)
+                prepare_expanded(DATA)
+                if args.expanded_100
+                else prepare_comparison(DATA, args.comparison_source)
                 if comparison
                 else prepare_pilot(DATA)
                 if args.pilot
                 else prepare(DATA)
             )
-            value = manifest_status(manifest, pilot=args.pilot, comparison=comparison)
+            value = manifest_status(
+                manifest, pilot=args.pilot, comparison=comparison, expanded=args.expanded_100
+            )
         elif args.action == "review":
-            review_manifest(data_path, pilot=args.pilot, comparison=comparison)
+            review_manifest(data_path, pilot=args.pilot, comparison=comparison, expanded=args.expanded_100)
             value = {"review_saved": True, "live_requests": 0}
         elif args.action == "live":
             if not sys.stdin.isatty():
                 raise ValueError("Live mode requires a user-operated interactive terminal")
-            value = run_experiment(data_path, pilot=args.pilot, comparison=comparison)
+            value = run_experiment(
+                data_path, pilot=args.pilot, comparison=comparison, expanded=args.expanded_100
+            )
         elif args.action == "report":
             identity = args.run_id or fingerprint(read_json(data_path / "manifest.json"))
             value = report_run(data_path / "runs" / identity)
@@ -1424,13 +1773,30 @@ def main(argv=None):
             manifest = read_json(data_path / "manifest.json")
             if comparison:
                 comparison_analysis(data_path, manifest)
-            value = manifest_status(manifest, pilot=args.pilot, comparison=comparison)
+            if args.expanded_100:
+                errors = validate_expanded_manifest(manifest)
+                if errors:
+                    raise ValueError("Expanded status blocked: " + "; ".join(errors))
+                expanded_source_binding(data_path, manifest)
+            value = manifest_status(
+                manifest, pilot=args.pilot, comparison=comparison, expanded=args.expanded_100
+            )
             value["live_requests"] = 0
         else:
             value = {
-                "mode": COMPARISON_MODE if comparison else PILOT_MODE if args.pilot else "offline",
+                "mode": EXPANDED_MODE
+                if args.expanded_100
+                else COMPARISON_MODE
+                if comparison
+                else PILOT_MODE
+                if args.pilot
+                else "offline",
                 "live_requests": 0,
-                "next": "prepare --pilot" if args.pilot else "prepare",
+                "next": "prepare --expanded-100"
+                if args.expanded_100
+                else "prepare --pilot"
+                if args.pilot
+                else "prepare",
             }
         print(json.dumps(value, ensure_ascii=False, indent=2))
         return 0
