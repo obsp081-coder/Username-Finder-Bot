@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
-    QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .snapscore_desktop import DesktopError, Target, WindowsDesktop
+from .ui_cards import Card, Disclosure, PageHeading, ScrollBody
 
 STEPS = ("فتح الكاميرا في المحادثة", "التقاط اللقطة", "إرسال اللقطة إلى المحادثة المفتوحة")
 
@@ -181,11 +182,18 @@ class SnapscorePanel(QScrollArea):
         self.calibration_timer.setInterval(50)
         self.calibration_timer.timeout.connect(self._capture_tick)
         body = QWidget()
-        layout = QVBoxLayout(body)
-        title = label("سناب سكور — خطوات مكتبية مراقبة")
-        title.setObjectName("heading")
-        layout.addWidget(title)
-        layout.addWidget(
+        shell = QVBoxLayout(body)
+        shell.setContentsMargins(12, 10, 12, 10)
+        shell.addWidget(PageHeading("سناب سكور", "خطوات مكتبية مراقبة • لا يُقاس ارتفاع السكور", "snapchat"))
+        self.form_area = ScrollBody()
+        form_body = QWidget()
+        layout = QVBoxLayout(form_body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.form_area.setWidget(form_body)
+        shell.addWidget(self.form_area, 1)
+        setup = Disclosure("خطوات الإعداد الآمن")
+        layout.addWidget(setup)
+        setup.body.addWidget(
             label(
                 "1. افتح web.snapchat.com بنفسك وسجّل الدخول في المتصفح؛ لا تُدخل بيانات الدخول هنا.\n"
                 "2. افتح محادثة واحدة مع شخص موافق، وجهّز الكاميرا يدويًا. "
@@ -205,8 +213,9 @@ class SnapscorePanel(QScrollArea):
         )
         warning.setObjectName("simulation")
         layout.addWidget(warning)
-        group = QGroupBox("المعايرة — إحداثيات فعلية على الشاشة، دون نقر")
-        form = QFormLayout(group)
+        group = Card("معايرة الشاشة · دون نقر", "filter")
+        form = QFormLayout()
+        group.body.addLayout(form)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.positions, self.capture_buttons = [], []
         for index, name in enumerate(STEPS):
@@ -214,6 +223,9 @@ class SnapscorePanel(QScrollArea):
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
             x, y = number(-100000, 100000, 0), number(-100000, 100000, 0)
+            for control in (x, y):
+                control.setMaximumWidth(120)
+                control.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             x.setAccessibleName(name + " — X")
             y.setAccessibleName(name + " — Y")
             capture = QPushButton("معايرة (5 ثوانٍ)")
@@ -239,25 +251,26 @@ class SnapscorePanel(QScrollArea):
         layout.addLayout(options)
         self.plan_text = label("المعاينة تعرض خطة المواضع فقط؛ لا تحرك المؤشر ولا تنفذ نقرات.")
         layout.addWidget(self.plan_text)
-        controls = QHBoxLayout()
-        self.preview = QPushButton("معاينة المواضع دون نقر")
+        controls = QGridLayout()
+        self.preview = QPushButton("معاينة دون نقر")
         self.start = QPushButton("بدء")
         self.start.setObjectName("primary")
         self.next = QPushButton("تأكيد الخطوة التالية")
         self.stop = QPushButton("إيقاف — F9")
-        self.stop.setStyleSheet("QPushButton { border: 2px solid #b34040; color: #8a2525; }")
+        self.stop.setObjectName("danger")
         self.preview.clicked.connect(self.preview_plan)
         self.start.clicked.connect(self.start_session)
         self.next.clicked.connect(self.next_step)
         self.stop.clicked.connect(self.stop_work)
-        for control in (self.preview, self.start, self.next, self.stop):
-            controls.addWidget(control)
-        layout.addLayout(controls)
+        for i, control in enumerate((self.preview, self.start, self.next, self.stop)):
+            controls.addWidget(control, i // 2, i % 2)
+        shell.addLayout(controls)
         self.status = label("")
         self.status.setAccessibleName("حالة أداة سناب سكور")
-        layout.addWidget(self.status)
+        self.status.setObjectName("statusPill")
+        shell.addWidget(self.status)
         self.counters = label("")
-        layout.addWidget(self.counters)
+        shell.addWidget(self.counters)
         layout.addStretch()
         self.setWidget(body)
         self.refresh()

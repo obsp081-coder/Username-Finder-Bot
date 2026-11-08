@@ -53,6 +53,7 @@ from .osintgram_results import (
 )
 from .osintgram_selection import CommandTree
 from .osintgram_setup import AccountSetup
+from .ui_cards import Card, caption, icon
 from .ui_helpers import style_combo_popup
 
 PARAM_TITLES = {
@@ -96,7 +97,8 @@ def label(text):
 
 class OsintgramPanel(QGroupBox):
     def __init__(self, parent=None, client=None, manager=None):
-        super().__init__("تحليل حسابات Instagram — Osintgram", parent)
+        super().__init__(parent)
+        self.setObjectName("analysisWorkspace")
         self.client = client or LocalOsintgramClient(self)
         self.manager = manager or BackendManager(self)
         if self.manager.parent() is None:
@@ -121,11 +123,13 @@ class OsintgramPanel(QGroupBox):
         layout = QVBoxLayout(self)
         self.root_layout = layout
         layout.setSpacing(8)
+        layout.addWidget(caption("Osintgram · تحليل مستقل عن إتاحة الأسماء", "cardTitle"))
         connection = QHBoxLayout()
         self.connection_status = label("غير متصل — اضغط «اتصال / إعادة المحاولة»")
         self.connection_status.setObjectName("osintStatus")
         connection.addWidget(self.connection_status, 1)
         self.reconnect = QPushButton("إعادة الاتصال")
+        self.reconnect.setIcon(icon("layers", size=18))
         self.reconnect.clicked.connect(self.connect_backend)
         connection.addWidget(self.reconnect)
         layout.addLayout(connection)
@@ -142,8 +146,13 @@ class OsintgramPanel(QGroupBox):
         self.pages.setCurrentIndex(1)
         layout.addWidget(self.pages)
         layout = QVBoxLayout(self.command_page)
+        target_card = Card("الحساب وحدود التحليل", "users")
+        layout.addWidget(target_card)
+        command_layout = layout
+        layout = target_card.body
 
-        target_row = QGridLayout()
+        target_row = QFormLayout()
+        target_row.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.target = QLineEdit()
         self.target.setPlaceholderText("username أو @username")
         self.target.setMaxLength(64)
@@ -155,11 +164,8 @@ class OsintgramPanel(QGroupBox):
         self.limit.setValue(10)
         self.limit.setMaximumWidth(100)
         self.limit.setAccessibleName("حد طلبات Osintgram")
-        target_row.addWidget(label("الحساب المطلوب تحليله"), 0, 0)
-        target_row.addWidget(self.target, 0, 1)
-        target_row.addWidget(label("حد طلبات التحليل"), 0, 2)
-        target_row.addWidget(self.limit, 0, 3)
-        target_row.setColumnStretch(1, 1)
+        target_row.addRow("الحساب المطلوب تحليله", self.target)
+        target_row.addRow("حد طلبات التحليل", self.limit)
         layout.addLayout(target_row)
         warning = label(
             "حد الطلبات يقلّل استهلاك التحليل. قد تستخدم تهيئة الحساب أو إعادة المحاولة طلبات إضافية. "
@@ -167,6 +173,10 @@ class OsintgramPanel(QGroupBox):
         )
         warning.setObjectName("igHint")
         layout.addWidget(warning)
+
+        command_card = Card("الأوامر والمعاملات", "layers")
+        command_layout.addWidget(command_card)
+        layout = command_card.body
 
         search_row = QHBoxLayout()
         self.search = QLineEdit()
@@ -178,7 +188,7 @@ class OsintgramPanel(QGroupBox):
         search_row.addWidget(self.search, 1)
         self.selection_count = label("لم تُحدّد أوامر بعد")
         search_row.addWidget(self.selection_count)
-        self.recommended_button = QPushButton("تحديد الخيارات المقترحة")
+        self.recommended_button = QPushButton("الخيارات المقترحة")
         self.recommended_button.setToolTip(
             "يستبدل التحديد بمعلومات الحساب الأساسية فقط إذا كانت مدعومة؛ "
             "لا يبدأ التحليل ولا يغيّر حد الطلبات."
@@ -195,7 +205,7 @@ class OsintgramPanel(QGroupBox):
         self.commands.setHeaderLabels(["المعلومات المطلوبة", "المعرّف"])
         self.commands.hideColumn(1)
         self.commands.setAccessibleName("أوامر Osintgram المكتشفة")
-        self.commands.setFixedHeight(300)
+        self.commands.setFixedHeight(240)
         self.commands.setMinimumWidth(0)
         self.commands.setColumnWidth(0, 190)
         self.commands.setWordWrap(True)
@@ -228,10 +238,12 @@ class OsintgramPanel(QGroupBox):
         self.config_grid.setColumnStretch(1, 1)
 
         actions = QHBoxLayout()
-        self.start = QPushButton("بدء تحليل الحساب")
+        self.start = QPushButton("بدء التحليل")
+        self.start.setToolTip("بدء تحليل الحساب بالأوامر المحددة")
         self.start.setObjectName("primary")
         self.start.clicked.connect(self.start_analysis)
         self.cancel = QPushButton("إلغاء التحليل")
+        self.cancel.setObjectName("danger")
         self.cancel.clicked.connect(self.cancel_analysis)
         self.json_export = QPushButton("تصدير JSON")
         self.json_export.clicked.connect(self.save_json)
@@ -246,12 +258,16 @@ class OsintgramPanel(QGroupBox):
         results_link.clicked.connect(lambda: self.pages.setCurrentIndex(2))
         actions.addWidget(results_link)
         actions.addStretch()
-        layout.addLayout(actions)
+        self.root_layout.insertLayout(2, actions)
         layout.addLayout(self.config_grid)
         self.execution_status = label("لم يبدأ أي تحليل. النتائج في الذاكرة فقط ما لم تصدّرها صراحةً.")
         self.root_layout.insertWidget(1, self.execution_status)
 
         layout = QVBoxLayout(self.result_page)
+        results_card = Card("نتائج التحليل", "file")
+        layout.addWidget(results_card, 1)
+        layout = results_card.body
+        layout.setAlignment(Qt.AlignmentFlag(0))
         exports = QHBoxLayout()
         exports.addWidget(self.json_export)
         exports.addWidget(self.csv_export)

@@ -246,8 +246,8 @@ def test_running_status_stop_visibility_and_responsive_countdown(panel, qtbot, m
     timer.timeout.connect(lambda: beats.append(True))
     timer.start(5)
     panel.start.click()
-    qtbot.wait(60)
-    assert len(beats) >= 3 and panel.session.active and not panel.desktop.clicks
+    qtbot.waitUntil(lambda: len(beats) >= 3, timeout=1000)
+    assert panel.session.active and not panel.desktop.clicks
     assert "جارٍ التشغيل" in panel.status.text()
     for control in (panel.stop, panel.status):
         position = control.mapTo(panel.viewport(), control.rect().center())

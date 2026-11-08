@@ -50,6 +50,8 @@ from .file_search import (
 from .file_search_ids import search_account_ids
 from .instagram_id import InstagramIdResolver
 from .instagram_ui import normalize_username, syntax_error
+from .platform_workspace import PlatformWorkspace
+from .ui_cards import Card, Disclosure, PageHeading, caption, icon
 from .ui_helpers import style_combo_popup
 
 
@@ -224,9 +226,18 @@ class FileSearchPanel(QScrollArea):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 10, 12, 10)
-        title = text_label("البحث داخل الملفات")
-        title.setObjectName("heading")
-        layout.addWidget(title)
+        layout.setSpacing(10)
+        layout.addWidget(
+            PageHeading("البحث داخل الملفات", "بحث محلي متدفق • دون فهارس أو نسخ كاملة من الملفات", "search")
+        )
+        root_layout = layout
+        self.workspace = PlatformWorkspace()
+        root_layout.addWidget(self.workspace, 1)
+        config_layout = self.workspace.add_page("الملفات وإعداد البحث")
+        results_layout = self.workspace.add_page("النتائج والمصدر", expand=True)
+        source_card = Card("الملفات المحلية", "folder")
+        config_layout.addWidget(source_card)
+        layout = source_card.body
         self.mode = QComboBox()
         self.mode.addItems(["البحث النصي العادي", "تحويل يوزر Instagram إلى ID ثم البحث"])
         self.mode.setAccessibleName("نمط البحث داخل الملفات")
@@ -234,6 +245,7 @@ class FileSearchPanel(QScrollArea):
         layout.addWidget(self.mode)
         files_row = QHBoxLayout()
         self.choose = QPushButton("اختيار ملف")
+        self.choose.setIcon(icon("folder", size=18))
         self.add = QPushButton("إضافة ملفات")
         self.remove = QPushButton("إزالة ملف")
         self.clear = QPushButton("مسح القائمة")
@@ -248,7 +260,12 @@ class FileSearchPanel(QScrollArea):
         self.file_list = QListWidget()
         self.file_list.setFixedHeight(70)
         self.file_list.setAccessibleName("ملفات البحث المحلية وأحجامها")
-        layout.addWidget(self.file_list)
+        self.file_details = Disclosure("الملفات المحددة · 0")
+        layout.addWidget(self.file_details)
+        self.file_details.body.addWidget(self.file_list)
+        query_card = Card("إعداد البحث", "filter")
+        config_layout.addWidget(query_card)
+        layout = query_card.body
         self.query_controls = QWidget()
         query_row = QHBoxLayout(self.query_controls)
         query_row.setContentsMargins(0, 0, 0, 0)
@@ -288,22 +305,28 @@ class FileSearchPanel(QScrollArea):
         self.start.setObjectName("primary")
         self.start.clicked.connect(self.start_search)
         self.cancel = QPushButton("إلغاء البحث")
+        self.cancel.setObjectName("danger")
         self.cancel.clicked.connect(self.cancel_work)
         actions.addWidget(self.start)
         actions.addWidget(self.cancel)
         actions.addStretch()
-        layout.addLayout(actions)
+        root_layout.addLayout(actions)
         self.search_hint = text_label("")
         layout.addWidget(self.search_hint)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 1000)
-        layout.addWidget(self.progress_bar)
+        root_layout.addWidget(self.progress_bar)
         self.status = text_label("اختر ملفات نصية وأدخل النص. لا تُنشأ فهارس أو نسخ من محتواها.")
-        layout.addWidget(self.status)
+        self.status.setObjectName("statusPill")
+        root_layout.addWidget(self.status)
+        result_card = Card("التطابقات ومعاينة المصدر", "file")
+        results_layout.addWidget(result_card, 1)
+        layout = result_card.body
+        layout.setAlignment(Qt.AlignmentFlag(0))
         self.splitter = splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setHandleWidth(9)
         splitter.setChildrenCollapsible(False)
-        splitter.setMinimumHeight(460)
+        splitter.setMinimumHeight(400)
         splitter.setStyleSheet("QSplitter::handle { background: #b9cce2; border-radius: 3px; }")
         splitter.setToolTip("اسحب الفاصل لتغيير ارتفاع النتائج ومعاينة السطر.")
         self.model = MatchModel(self)
@@ -322,6 +345,15 @@ class FileSearchPanel(QScrollArea):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.selectionModel().currentRowChanged.connect(self.open_result)
         splitter.addWidget(self.table)
+        self.results_empty = caption("لا توجد نتائج معروضة. اختر ملفات وأدخل نص البحث للبدء.", "emptyTitle")
+        self.results_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.results_empty.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        empty_layout = QVBoxLayout(self.table.viewport())
+        empty_layout.addStretch()
+        empty_layout.addWidget(self.results_empty)
+        empty_layout.addStretch()
+        self.model.modelReset.connect(lambda: self.results_empty.setVisible(not self.model.rowCount()))
+        self.model.rowsInserted.connect(lambda: self.results_empty.hide())
         viewer_body = QWidget()
         viewer_layout = QVBoxLayout(viewer_body)
         viewer_layout.setContentsMargins(0, 4, 0, 0)
@@ -370,6 +402,15 @@ class FileSearchPanel(QScrollArea):
         self.username.textChanged.connect(self._invalidate_resolution)
         self._mode_changed()
         self._actions()
+
+    def ensureWidgetVisible(self, child, xmargin=50, ymargin=50):
+        for index in range(self.workspace.count()):
+            area = self.workspace.widget(index)
+            if area.widget().isAncestorOf(child):
+                self.workspace.setCurrentIndex(index)
+                area.ensureWidgetVisible(child, xmargin, ymargin)
+                return
+        super().ensureWidgetVisible(child, xmargin, ymargin)
 
     @property
     def busy(self):
@@ -487,6 +528,7 @@ class FileSearchPanel(QScrollArea):
 
     def _file_rows(self):
         self.file_list.clear()
+        self.file_details.toggle.setText(f"الملفات المحددة · {len(self.files)}  ▾")
         for file in self.files:
             self.file_list.addItem(f"{Path(file.path).name} — {size_text(file.size)}")
             self.file_list.item(self.file_list.count() - 1).setToolTip(file.path)
@@ -543,6 +585,7 @@ class FileSearchPanel(QScrollArea):
         self._begin_scan(paths, self.query.text(), limit)
 
     def _begin_scan(self, paths, query, limit, *, structured=False):
+        self.workspace.setCurrentIndex(1)
         self._cancel_view()
         self.info = self.page = None
         self.viewer.clear()

@@ -35,6 +35,7 @@ from .file_generator_output import (
     proposed_output,
 )
 from .file_generator_rules import DIGITS, GAMING, LOWER, SOCIAL, UPPER, Grammar, variants, violations
+from .ui_cards import Card, CardGrid, PageHeading, ScrollBody
 from .ui_helpers import style_combo_popup
 
 CONFIDENCE = {"Verified": "موثق للصيغة المحددة", "Provisional": "مؤقت", "Incomplete": "غير مكتمل"}
@@ -99,6 +100,7 @@ class RuleEditor(QGroupBox):
         ):
             row = QHBoxLayout()
             check, subset = QCheckBox(label), QLineEdit(alphabet)
+            subset.setMaximumWidth(420)
             subset.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             check.setToolTip(
                 {
@@ -112,6 +114,7 @@ class RuleEditor(QGroupBox):
             )
             row.addWidget(check)
             row.addWidget(subset)
+            row.addStretch()
             check.toggled.connect(self.changed)
             subset.textEdited.connect(self.changed)
             self.groups[key] = check, subset, alphabet
@@ -143,6 +146,7 @@ class RuleEditor(QGroupBox):
         self.last.setToolTip("نوع الخانة الأخيرة في كل اسم؛ لا يضيف حروفًا جديدة إلى المجموعة.")
         self.prefix, self.suffix = QLineEdit(), QLineEdit()
         for control in (self.prefix, self.suffix):
+            control.setMaximumWidth(320)
             control.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             control.textEdited.connect(self.changed)
         self.prefix.setToolTip("حروف أو أرقام ثابتة في بداية كل اسم، وهي جزء من الطول المحدد.")
@@ -269,10 +273,18 @@ class FileGeneratorPanel(QScrollArea):
         self.setWidgetResizable(True)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         body = QWidget()
-        layout = QVBoxLayout(body)
-        title = QLabel("صانع ملفات اليوزرات")
-        title.setObjectName("title")
-        layout.addWidget(title)
+        shell = QVBoxLayout(body)
+        shell.setContentsMargins(12, 10, 12, 10)
+        shell.addWidget(
+            PageHeading("صانع ملفات اليوزرات", "توليد محلي إلى TXT / CSV • دون فحص إتاحة", "generate")
+        )
+        self.form_area = ScrollBody()
+        form_body = QWidget()
+        layout = QVBoxLayout(form_body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.form_area.setWidget(form_body)
+        shell.addWidget(self.form_area, 1)
         warning = QLabel(
             "أنشئ كل الأسماء الممكنة من اختياراتك واحفظها في ملف. لا يُفحص توفر الأسماء، "
             "وقد ترفض المنصة بعضها. ندعم الحروف الإنجليزية والأرقام والعلامات المحددة فقط."
@@ -283,15 +295,17 @@ class FileGeneratorPanel(QScrollArea):
         warning.setWordWrap(True)
         layout.addWidget(warning)
         root_layout = layout
-        self.basic = QGroupBox("الإعدادات الأساسية")
-        root_layout.addWidget(self.basic)
-        layout = QVBoxLayout(self.basic)
+        self.basic = Card("المنصة والهوية", "layers")
+        output_card = Card("الملف ومجلد الحفظ", "folder")
+        root_layout.addWidget(CardGrid((self.basic, output_card), columns=(2, 1), minimum=350))
+        layout = self.basic.body
         self.categories = QTabWidget()
         self.platforms = []
         for label, names in (("التواصل الاجتماعي", SOCIAL), ("الألعاب", GAMING)):
             page = QWidget()
             form = QFormLayout(page)
             combo = QComboBox()
+            combo.setMaximumWidth(330)
             combo.addItems(names)
             style_combo_popup(combo)
             form.addRow("المنصة", combo)
@@ -301,6 +315,7 @@ class FileGeneratorPanel(QScrollArea):
         self.categories.currentChanged.connect(self.platform_changed)
         layout.addWidget(self.categories)
         self.variant = QComboBox()
+        self.variant.setMaximumWidth(330)
         style_combo_popup(self.variant)
         self.variant.currentIndexChanged.connect(self.restore_defaults)
         identity_form = QFormLayout()
@@ -315,6 +330,7 @@ class FileGeneratorPanel(QScrollArea):
         layout.addWidget(self.metadata)
         mode_row = QHBoxLayout()
         self.mode = QComboBox()
+        self.mode.setMaximumWidth(260)
         self.mode.addItem("قواعد المنصة", "Platform Rules")
         self.mode.addItem("قواعد مخصصة", "Custom Rules")
         self.mode.setToolTip(
@@ -327,6 +343,9 @@ class FileGeneratorPanel(QScrollArea):
         self.reset.clicked.connect(self.restore_defaults)
         mode_row.addWidget(self.reset)
         layout.addLayout(mode_row)
+        rules_card = Card("المحارف والطول", "users")
+        root_layout.addWidget(rules_card)
+        layout = rules_card.body
         self.primary = RuleEditor("اسم المستخدم")
         self.secondary = RuleEditor("العلامة المرافقة (Tagline)")
         self.secondary.setToolTip(
@@ -345,8 +364,8 @@ class FileGeneratorPanel(QScrollArea):
             "إظهار قيود العلامات وبداية الاسم ونهايته والتفاصيل؛ الطي لا يغير أي اختيار."
         )
         root_layout.addWidget(self.advanced_toggle)
-        self.advanced = QGroupBox("الإعدادات المتقدمة")
-        advanced_layout = QVBoxLayout(self.advanced)
+        self.advanced = Card("الإعدادات المتقدمة", "filter")
+        advanced_layout = self.advanced.body
         self.details = QLabel()
         self.details.setWordWrap(True)
         self.details.setTextFormat(Qt.TextFormat.PlainText)
@@ -361,6 +380,7 @@ class FileGeneratorPanel(QScrollArea):
         self.rule_warning.setObjectName("simulation")
         layout.addWidget(self.rule_warning)
         self.mode.currentIndexChanged.connect(self.update_warning)
+        layout = output_card.body
         output = QFormLayout()
         self.format = QComboBox()
         self.format.addItems(["TXT", "CSV"])
@@ -380,26 +400,27 @@ class FileGeneratorPanel(QScrollArea):
         self.suggested_path.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         output.addRow("الملف المقترح", self.suggested_path)
         layout.addLayout(output)
-        actions = QHBoxLayout()
-        self.preview = QPushButton("حساب عدد الأسماء وحجم الملف")
+        actions = QGridLayout()
+        self.preview = QPushButton("حساب العدد والحجم")
         self.start = QPushButton("توليد الملف")
         self.start.setObjectName("primary")
-        self.resume = QPushButton("استئناف ملف محفوظ…")
+        self.resume = QPushButton("استئناف ملف…")
         self.stop = QPushButton("إيقاف وحفظ التقدم")
+        self.stop.setObjectName("danger")
         self.preview.clicked.connect(lambda: self.prepare(False))
         self.start.clicked.connect(lambda: self.prepare(True))
         self.resume.clicked.connect(self.resume_file)
         self.stop.clicked.connect(self.cancel.set)
-        for control in (self.preview, self.start, self.resume, self.stop):
-            actions.addWidget(control)
+        for i, control in enumerate((self.preview, self.start, self.resume, self.stop)):
+            actions.addWidget(control, i // 2, i % 2)
         self.summary = QLabel("اختر المنصة واضبط المحارف، ثم احسب الاحتمالات قبل التأكيد.")
         self.summary.setWordWrap(True)
         self.summary.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.summary)
-        layout.addLayout(actions)
+        shell.addWidget(self.summary)
+        shell.addLayout(actions)
         self.bar = QProgressBar()
         self.bar.setRange(0, 1000)
-        layout.addWidget(self.bar)
+        shell.addWidget(self.bar)
         root_layout.addStretch()
         self.format.currentIndexChanged.connect(self.refresh_description)
         self.destination.textChanged.connect(self.refresh_description)

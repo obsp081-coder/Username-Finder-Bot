@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -35,6 +34,7 @@ from .overnight_ui import OvernightControls
 from .platform_workspace import PlatformWorkspace, ReadableColumns, ResultsPresentation, generation_fields
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
+from .ui_cards import Card, CardGrid, Disclosure, PageHeading, caption, icon
 from .ui_helpers import local_time, style_combo_popup
 from .x_recovery import XRecovery
 from .x_runner import XRunner
@@ -92,18 +92,15 @@ class XPanel(QScrollArea):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 10, 16, 12)
-        title = QLabel("فحص يوزرات X — تجريبي")
-        title.setObjectName("title")
-        layout.addWidget(title)
+        layout.setSpacing(9)
+        layout.addWidget(PageHeading("X · فحص الأسماء", "فحص تجريبي مستقل • الإتاحة غير مثبتة", "x"))
         notice = QLabel(
             "تحقق الإتاحة غير موثوق • إشارات available الحالية والقديمة تُقيَّم Unknown؛ الأدلة الأصلية محفوظة."
         )
         notice.setWordWrap(True)
         notice.setObjectName("simulation")
         layout.addWidget(notice)
-        self.activity_status = QLabel("جاهز • يمكن تشغيل عمل X واحد بالتزامن مع Roblox.")
-        self.activity_status.setWordWrap(True)
-        layout.addWidget(self.activity_status)
+        self.activity_status = caption("جاهز • يمكن تشغيل عمل X واحد بالتزامن مع Roblox.", "statusPill")
         root_layout = layout
         self.workspace = PlatformWorkspace()
         root_layout.addWidget(self.workspace, 1)
@@ -116,8 +113,8 @@ class XPanel(QScrollArea):
         self.warning.setObjectName("simulation")
         self.warning.setWordWrap(True)
         layout.addWidget(self.warning)
-        connection_box = QGroupBox("اتصال X — إعداد العمليات الجديدة")
-        connection_layout = QVBoxLayout(connection_box)
+        connection_box = Card("الاتصال · للعمليات الجديدة", "layers")
+        connection_layout = connection_box.body
         connection_form = QFormLayout()
         self.connection_mode = QComboBox()
         self.connection_mode.addItem("اتصال مباشر (الافتراضي)", "direct")
@@ -154,9 +151,14 @@ class XPanel(QScrollArea):
         connection_page.addStretch()
         self.overnight = OvernightControls(self, "X")
         history_layout.addWidget(self.overnight)
-        input_card = QGroupBox("إعداد فحص X التجريبي")
-        input_layout.addWidget(input_card)
-        layout = QVBoxLayout(input_card)
+        history_card = Card("العملية المحددة وسجلها", "clock")
+        history_layout.addWidget(history_card)
+        history_root = history_layout
+        history_layout = history_card.body
+        input_card = Card("الأسماء · توليد أو استيراد", "users")
+        settings_card = Card("التوقيت والتخطي", "clock")
+        input_layout.addWidget(CardGrid((input_card, settings_card), columns=(2, 1), minimum=350))
+        layout = input_card.body
         self.modes = QTabWidget()
         input_hint = QLabel("إعداد إدخال جديد؛ لا يغيّر مصدر العملية المحفوظة المحددة أدناه.")
         input_hint.setWordWrap(True)
@@ -192,11 +194,14 @@ class XPanel(QScrollArea):
         self.modes.addTab(imported, "إدخال واستيراد")
         self.modes.currentChanged.connect(self._fit_mode)
         layout.addWidget(self.modes)
-        self.skip_previous = QCheckBox("تجاوز أسماء X المفحوصة سابقًا (Skip Previously Checked)")
+        layout = settings_card.body
+        self.skip_previous = QCheckBox("تجاوز أسماء X المفحوصة سابقًا")
+        self.skip_previous.setToolTip("Skip Previously Checked")
         self.skip_previous.setChecked(True)
         layout.addWidget(self.skip_previous)
         speed_form = QFormLayout()
         speed_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+        speed_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.speed = QComboBox()
         for value in x.INTERVALS:
             label = "0 ثانية — دون تأخير إضافي (متسلسل)" if value == 0 else f"{value:g} ثانية"
@@ -208,6 +213,7 @@ class XPanel(QScrollArea):
         layout.addLayout(speed_form)
         self.speed_warning = QLabel("سرعة تجريبية؛ لم يثبت أمانها أو استقرارها لفحص X طويل المدة.")
         self.speed_warning.setWordWrap(True)
+        self.speed_warning.setObjectName("notice")
         layout.addWidget(self.speed_warning)
         self.speed_warning.setVisible(self.speed.currentData() < 5)
         self.speed.currentIndexChanged.connect(self.speed_changed)
@@ -223,10 +229,14 @@ class XPanel(QScrollArea):
             root_layout,
             (
                 ("بدء الفحص التجريبي", self.start),
-                ("تحضير ومعاينة محلية", self.preview),
-                ("إيقاف", self.stop),
+                ("معاينة محلية", self.preview),
+                ("إيقاف وحفظ", self.stop),
             ),
         )
+        self.start_button.setObjectName("primary")
+        self.stop_button.setObjectName("danger")
+        self.stop_button.setIcon(icon("stop", "#ce425d", 17))
+        root_layout.addWidget(self.activity_status)
         self.operations = QComboBox()
         style_combo_popup(self.operations)
         self.operations.currentIndexChanged.connect(self.select_operation)
@@ -234,11 +244,15 @@ class XPanel(QScrollArea):
         self.resume_button, self.recheck_button, self.selected_button = self._actions(
             history_layout,
             (
-                ("استئناف العملية المحددة", self.resume),
-                ("إعادة فحص جميع الأسماء السابقة", self.recheck_all),
-                ("إعادة فحص الاسم المحدد", self.recheck_selected),
+                ("استئناف المحددة", self.resume),
+                ("إعادة فحص السجل", self.recheck_all),
+                ("إعادة فحص المحدد", self.recheck_selected),
             ),
         )
+        recovery_card = Card("القيود والاستعادة اليدوية", "info")
+        history_root.addWidget(recovery_card)
+        history_layout = recovery_card.body
+        history_layout.addWidget(self.restriction)
         self.review_restriction_button = QPushButton("مراجعة دليل قيد X — دون اتصال")
         self.review_restriction_button.clicked.connect(self.review_restriction)
         history_layout.addWidget(self.review_restriction_button)
@@ -259,7 +273,9 @@ class XPanel(QScrollArea):
         history_layout.addWidget(self.preparation_summary)
         self.preview_label = QLabel("الصيغة: 5–15 محرف ASCII؛ حروف وأرقام و_، بما في ذلك _ في الطرفين.")
         self.preview_label.setWordWrap(True)
-        layout.addWidget(self.preview_label)
+        preview_card = Card("التحضير المحلي", "check")
+        preview_card.body.addWidget(self.preview_label)
+        input_layout.addWidget(preview_card)
         input_layout.addStretch()
         history_layout.addStretch()
         layout = results_layout
@@ -282,7 +298,7 @@ class XPanel(QScrollArea):
         self.advanced_filters = AdvancedResultFilters("X", self.search, self.classification)
         self.table = make_table(["اسم X", "التصنيف الأولي", "آخر فحص", "عدد الملاحظات", "التغير", "سبب API"])
         self.table.setMinimumHeight(150)
-        self.result_columns = ReadableColumns(self.table, self.fill_table)
+        self.result_columns = ReadableColumns(self.table, self.fill_table, fill_width=True)
         self.result_query = ResultQueryController(self)
         self.result_query.ready.connect(self._show_results)
         self.result_query.cleared.connect(self._clear_results)
@@ -292,7 +308,7 @@ class XPanel(QScrollArea):
         self.advanced_filters.cancel_button.clicked.connect(lambda: self.result_query.cancel())
         self.results_presentation = ResultsPresentation(self.table, (0, 1), "X")
         layout.addWidget(self.results_presentation)
-        layout.addWidget(self.table)
+        layout.addWidget(self.table, 1)
         self.page_label = QLabel()
         layout.addWidget(self.page_label)
         self._actions(
@@ -305,6 +321,9 @@ class XPanel(QScrollArea):
             ),
         )
         self.export_history = QCheckBox("تضمين جميع الملاحظات التاريخية في التصدير")
+        self.results_options = Disclosure("التصفية المتقدمة وخيارات التصدير")
+        layout.addWidget(self.results_options)
+        layout = self.results_options.body
         layout.addWidget(self.advanced_filters)
         self.export_history.setToolTip("عند تفعيله: تطبق الشروط على كل ملاحظة تاريخية بنفسها.")
         layout.addWidget(self.export_history)

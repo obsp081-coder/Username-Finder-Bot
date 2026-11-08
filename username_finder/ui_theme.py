@@ -1,5 +1,7 @@
 """Shared light design tokens for the desktop presentation layer."""
 
+from pathlib import Path
+
 LIGHT_THEME = """
 QWidget#cardGrid { background: transparent; }
 QWidget { background: #f5f7fb; color: #162342; font-family: 'Segoe UI'; font-size: 11pt; }
@@ -27,6 +29,15 @@ QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit, QPlainTextEdit, QListWidget {
     background: #ffffff; border: 1px solid #cbd5e3; border-radius: 6px; padding: 5px;
     selection-background-color: #dbeafe; selection-color: #183f6d; }
 QLineEdit, QAbstractSpinBox, QComboBox { min-height: 24px; }
+QAbstractSpinBox { padding-right: 22px; padding-left: 6px; }
+QSpinBox, QDoubleSpinBox { qproperty-alignment: AlignCenter; }
+QAbstractSpinBox::up-button { subcontrol-origin: border; subcontrol-position: top right;
+    width: 18px; border-left: 1px solid #dce5fa; border-bottom: 1px solid #dce5fa; }
+QAbstractSpinBox::down-button { subcontrol-origin: border; subcontrol-position: bottom right;
+    width: 18px; border-left: 1px solid #dce5fa; }
+QAbstractSpinBox::up-arrow { image: url(__UI_ASSETS__/ui_arrow_up.svg); width: 9px; height: 6px; }
+QAbstractSpinBox::down-arrow { image: url(__UI_ASSETS__/ui_arrow_down.svg); width: 9px; height: 6px; }
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover { background: #e4edff; }
 QFrame#surfaceCard QCheckBox { background: transparent; }
 QWidget#emptyState { background: #f7f9ff; border-radius: 10px; }
 QLineEdit:focus, QAbstractSpinBox:focus, QComboBox:focus, QTextEdit:focus, QPlainTextEdit:focus { border:
@@ -107,4 +118,4 @@ QPushButton#danger:disabled { color: #9aa8bd; border-color: #dce3ec; background:
 QTabBar#modeStrip::tab { background: #edf2fe; border: 1px solid #dce5fa; border-radius: 8px;
     padding: 9px 12px; color: #324c79; }
 QTabBar#modeStrip::tab:selected { background: #e0eaff; border: 1px solid #739bff; color: #1753c2; }
-"""
+""".replace("__UI_ASSETS__", Path(__file__).resolve().parent.as_posix())

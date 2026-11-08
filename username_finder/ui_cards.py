@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTabBar,
     QVBoxLayout,
@@ -107,6 +108,36 @@ class Card(QFrame):
         self.body.addLayout(header)
 
 
+class PageHeading(QWidget):
+    def __init__(self, title, subtitle, symbol):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        image = QLabel()
+        image.setPixmap(icon(symbol, size=34).pixmap(34, 34))
+        row.addWidget(image)
+        text = QVBoxLayout()
+        text.setSpacing(3)
+        text.addWidget(caption(title, "pageTitle"))
+        text.addWidget(caption(subtitle, "pageSubtitle"))
+        row.addLayout(text, 1)
+
+
+class ScrollBody(QScrollArea):
+    """Let long forms scroll while their parent keeps stop/status controls visible."""
+
+    def __init__(self):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def sizeHint(self):
+        return QSize(0, 240)
+
+    def minimumSizeHint(self):
+        return QSize(0, 80)
+
+
 class MetricCard(QFrame):
     def __init__(self, title, note, symbol):
         super().__init__()
@@ -178,7 +209,7 @@ class CardGrid(QWidget):
             self.grid.setColumnStretch(column, int(column < count))
         for index, widget in enumerate(self.widgets):
             self.grid.removeWidget(widget)
-            self.grid.addWidget(widget, index // count, index % count)
+            self.grid.addWidget(widget, index // count, index % count, Qt.AlignmentFlag.AlignTop)
         self.current_columns = count
 
     def minimumSizeHint(self):

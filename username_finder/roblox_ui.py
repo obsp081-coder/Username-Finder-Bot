@@ -191,7 +191,7 @@ class RobloxPanel(QScrollArea):
         self.skip_previous.setChecked(True)
         layout.addWidget(self.skip_previous)
         speed_form = QFormLayout()
-        speed_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        speed_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         speed_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self.speed = QComboBox()
         self.speed.setMaximumWidth(340)

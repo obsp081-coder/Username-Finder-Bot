@@ -9,7 +9,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from .osintgram_ui import OsintgramPanel
 from .platform_workspace import ResultsPresentation
+from .ui_cards import Card, PageHeading, icon
 
 
 def normalize_username(value: str) -> str:
@@ -122,10 +122,12 @@ class InstagramPanel(QScrollArea):
         layout = QVBoxLayout(self.body)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+        layout.addWidget(PageHeading("Instagram", "تحضير أسماء محلي وتحليل Osintgram مستقل", "instagram"))
         self.modes = QTabBar()
         self.modes.addTab("فحص أسماء المستخدمين")
         self.modes.addTab("تحليل حسابات Instagram")
-        self.modes.setExpanding(False)
+        self.modes.setObjectName("modeStrip")
+        self.modes.setExpanding(True)
         layout.addWidget(self.modes)
         body_layout = layout
         self.names_page = QWidget()
@@ -137,7 +139,7 @@ class InstagramPanel(QScrollArea):
         headings = QVBoxLayout()
         headings.setSpacing(3)
         self.title = QLabel("فحص يوزرات إنستغرام")
-        self.title.setObjectName("igTitle")
+        self.title.setObjectName("cardTitle")
         self.title.setWordWrap(True)
         headings.addWidget(self.title)
         subtitle = QLabel("تجهيز الأسماء ومعاينتها قبل تفعيل الفحص الحقيقي")
@@ -153,9 +155,8 @@ class InstagramPanel(QScrollArea):
 
         self.input_layout = QGridLayout()
         self.input_layout.setSpacing(10)
-        self.manual_group = QGroupBox("إدخال يدوي")
-        form = QVBoxLayout(self.manual_group)
-        form.setContentsMargins(0, 0, 0, 0)
+        self.manual_group = Card("إدخال يدوي", "users")
+        form = self.manual_group.body
         form.setSpacing(6)
         manual_row = QHBoxLayout()
         manual_row.addWidget(QLabel("اسم المستخدم"))
@@ -178,9 +179,8 @@ class InstagramPanel(QScrollArea):
         form.addWidget(rules)
         form.addStretch()
 
-        self.txt_group = QGroupBox("ملفات TXT")
-        file_layout = QVBoxLayout(self.txt_group)
-        file_layout.setContentsMargins(0, 0, 0, 0)
+        self.txt_group = Card("استيراد TXT", "import")
+        file_layout = self.txt_group.body
         file_layout.setSpacing(6)
         self.file_count = QLabel("لم تُحدد ملفات بعد.")
         self.file_count.setObjectName("igHint")
@@ -196,6 +196,7 @@ class InstagramPanel(QScrollArea):
         file_actions = QHBoxLayout()
         file_actions.setSpacing(8)
         self.add_button = QPushButton("إضافة ملفات…")
+        self.add_button.setIcon(icon("folder", size=18))
         self.add_button.clicked.connect(self.add_files)
         file_actions.addWidget(self.add_button)
         self.remove_button = QPushButton("إزالة المحدد")
@@ -206,9 +207,8 @@ class InstagramPanel(QScrollArea):
         file_layout.addStretch()
         layout.addLayout(self.input_layout)
 
-        preview_group = QGroupBox("معاينة الأسماء")
-        preview_layout = QVBoxLayout(preview_group)
-        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_group = Card("المعاينة المحلية", "check")
+        preview_layout = preview_group.body
         preview_layout.setSpacing(6)
         preview_header = QHBoxLayout()
         self.preview_button = QPushButton("معاينة الأسماء")
@@ -241,9 +241,8 @@ class InstagramPanel(QScrollArea):
         verification.addWidget(disabled_note, 1)
         layout.addLayout(verification)
 
-        results = QGroupBox("نتائج Instagram")
-        results_layout = QVBoxLayout(results)
-        results_layout.setContentsMargins(0, 0, 0, 0)
+        results = Card("نتائج Instagram", "file")
+        results_layout = results.body
         self.counter_layout = QGridLayout()
         self.counter_layout.setSpacing(8)
         self.counters = {}

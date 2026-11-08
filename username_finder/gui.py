@@ -59,7 +59,7 @@ from .scheduling import ScheduleConfig, Scheduler
 from .snapscore_ui import SnapscorePanel
 from .sources import MeaningLibrary, make_snapshot, preview_txt
 from .storage import Store
-from .ui_cards import icon
+from .ui_cards import Card, CardGrid, PageHeading, ScrollBody, icon
 from .ui_helpers import REASONS, WheelGuard, local_time, status_text, style_combo_popup
 from .ui_theme import LIGHT_THEME
 from .x_ui import XPanel
@@ -318,32 +318,37 @@ class MainWindow(QMainWindow):
     def build_settings(self):
         self.settings_page = QWidget()
         layout = QVBoxLayout(self.settings_page)
-        layout.setSpacing(14)
-        presets = QGroupBox("قوالب البحث")
-        preset_layout = QVBoxLayout(presets)
+        layout.setSpacing(10)
+        layout.addWidget(
+            PageHeading("سناب · إعداد البحث", "الفحص الحقيقي معطّل • جميع عمليات البحث محاكاة", "snapchat")
+        )
+        presets = Card("قوالب البحث المحفوظة", "folder")
+        preset_layout = presets.body
         select_row = QHBoxLayout()
+        preset_actions = QGridLayout()
         self.preset_selector = combo([("إعدادات جديدة — غير محفوظة", None)])
         self.preset_selector.setMinimumWidth(220)
         select_row.addWidget(self.preset_selector, 1)
         self.preset_save = button("حفظ القالب", self.save_preset)
         self.preset_save.setToolTip("حفظ التغييرات في القالب المحدد، أو إنشاء قالب عند عدم اختيار قالب.")
-        select_row.addWidget(self.preset_save)
+        preset_actions.addWidget(self.preset_save, 0, 0)
         save_as = button("نسخة باسم جديد…", lambda: self.save_preset(save_as=True))
         save_as.setToolTip("إنشاء قالب مستقل مع الاحتفاظ بالقالب السابق.")
-        select_row.addWidget(save_as)
+        preset_actions.addWidget(save_as, 0, 1)
         self.preset_rename = button("إعادة تسمية", self.rename_preset)
         self.preset_delete = button("حذف", self.delete_preset)
-        select_row.addWidget(self.preset_rename)
-        select_row.addWidget(self.preset_delete)
-        select_row.addStretch()
+        preset_actions.addWidget(self.preset_rename, 0, 2)
+        preset_actions.addWidget(self.preset_delete, 0, 3)
         preset_layout.addLayout(select_row)
+        preset_layout.addLayout(preset_actions)
         self.preset_notice = QLabel("عدّل الإعدادات، ثم احفظها كقالب لاستخدامها لاحقًا.")
         self.preset_notice.setWordWrap(True)
         preset_layout.addWidget(self.preset_notice)
         layout.addWidget(presets)
 
-        basic = QGroupBox("إعداد البحث")
-        form = QFormLayout(basic)
+        basic = Card("مصدر الأسماء وحدود البحث", "users")
+        form = QFormLayout()
+        basic.body.addLayout(form)
         self._fit_settings_form(form)
         self.source = combo([("توليد تلقائي", "generator"), ("ملفات TXT", "txt")])
         self.mode = combo(
@@ -545,21 +550,36 @@ class MainWindow(QMainWindow):
     def build_run(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        row = QHBoxLayout()
+        layout.addWidget(
+            PageHeading("سناب · تشغيل المحاكاة", "النتائج والسرعة تخص المحاكاة فقط؛ لا اتصال بسناب", "play")
+        )
+        row = QGridLayout()
         self.start_button = button("بدء / استكمال", self.start_engine)
         self.pause_button = button("إيقاف مؤقت", self.pause_engine)
         self.stop_button = button("إيقاف آمن", self.stop_engine)
-        self.recover_button = button("فحص العائق وتجهيز الاستكمال", self.recover_blocked_job)
+        self.recover_button = button("مراجعة العائق والاستكمال", self.recover_blocked_job)
+        self.recover_button.setToolTip("فحص العائق وتجهيز الاستكمال دون تجاوز القيود")
         self.start_button.setObjectName("primary")
         self.start_button.setEnabled(False)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
         self.recover_button.setEnabled(False)
-        row.addWidget(self.start_button)
-        row.addWidget(self.pause_button)
-        row.addWidget(self.stop_button)
-        row.addWidget(self.recover_button)
+        self.stop_button.setObjectName("danger")
+        row.addWidget(self.start_button, 0, 0)
+        row.addWidget(self.pause_button, 0, 1)
+        row.addWidget(self.stop_button, 1, 0)
+        row.addWidget(self.recover_button, 1, 1)
         layout.addLayout(row)
+        self.run_area = ScrollBody()
+        run_body = QWidget()
+        self.run_area.setWidget(run_body)
+        layout.addWidget(self.run_area, 1)
+        layout = QVBoxLayout(run_body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        run_card = Card("حالة العملية وتقدمها", "layers")
+        layout.addWidget(run_card)
+        root_layout = layout
+        layout = run_card.body
         self.state_label = QLabel("لا يوجد بحث محدد. أنشئ بحثًا من الإعدادات أو اختر عملية من السجل.")
         self.state_label.setObjectName("heading")
         self.state_label.setWordWrap(True)
@@ -575,16 +595,19 @@ class MainWindow(QMainWindow):
             label.setObjectName("metric")
             summary.addWidget(label)
         layout.addLayout(summary)
-        cards = QGridLayout()
+        cards = []
         self.status_cards = {}
-        for column, (key, value) in enumerate(STATUS_LABELS.items()):
+        for key, value in STATUS_LABELS.items():
             card = QLabel(f"{value} · محاكاة\n—")
             card.setAlignment(Qt.AlignmentFlag.AlignCenter)
             card.setObjectName("metric")
+            card.setMinimumHeight(58)
+            card.setWordWrap(True)
             self.status_cards[key] = card
-            cards.addWidget(card, 0, column)
-        layout.addLayout(cards)
+            cards.append(card)
+        layout.addWidget(CardGrid(cards, columns=(5, 3, 1), minimum=95))
         self.timing_label = QLabel("الوقت الفعلي: —    |    نتائج حاسمة في المحاكاة/دقيقة: —")
+        self.timing_label.setWordWrap(True)
         layout.addWidget(self.timing_label)
         detail_toggle = QCheckBox("تفاصيل المعالجة والتخطي")
         layout.addWidget(detail_toggle)
@@ -598,15 +621,16 @@ class MainWindow(QMainWindow):
         self.schedule_label.setWordWrap(True)
         layout.addWidget(self.schedule_label)
         self.run_note = QLabel("المحاكاة لا تتصل بسناب. السرعة المعروضة تخص نتائج المحاكاة فقط.")
+        self.run_note.setWordWrap(True)
         layout.addWidget(self.run_note)
-        summary_box = QGroupBox("إعدادات البحث المحدد")
-        summary_layout = QVBoxLayout(summary_box)
+        summary_box = Card("إعدادات البحث المحدد", "info")
+        summary_layout = summary_box.body
         self.job_summary = QLabel("لا يوجد بحث محدد بعد.")
         self.job_summary.setWordWrap(True)
         self.job_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         summary_layout.addWidget(self.job_summary)
-        layout.addWidget(summary_box)
-        layout.addStretch(1)
+        root_layout.addWidget(summary_box)
+        root_layout.addStretch(1)
         self.search_tabs.addTab(page, "التشغيل")
 
     @staticmethod
@@ -657,7 +681,14 @@ class MainWindow(QMainWindow):
     def build_results(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        row = QHBoxLayout()
+        layout.addWidget(
+            PageHeading("سناب · نتائج البحث", "سجل المحاكاة منفصل عن التحقق الحقيقي المعطّل", "file")
+        )
+        results_card = Card("النتائج والتصفية", "filter")
+        layout.addWidget(results_card, 1)
+        layout = results_card.body
+        layout.setAlignment(Qt.AlignmentFlag(0))
+        row = QGridLayout()
         self.status_filter = combo([("جميع الحالات", "")] + [(v, k) for k, v in STATUS_LABELS.items()])
         self.results_mode = combo([("محاكاة", "simulated"), ("حقيقي", "real")])
         self.result_search = text_input("بحث داخل اليوزر")
@@ -669,11 +700,11 @@ class MainWindow(QMainWindow):
                 ("الاسم تنازليًا", "name_desc"),
             ]
         )
-        row.addWidget(self.status_filter)
-        row.addWidget(self.results_mode)
-        row.addWidget(self.result_search)
-        row.addWidget(self.result_sort)
-        row.addWidget(button("بحث / تحديث", lambda: self.refresh_results(reset=True)))
+        row.addWidget(self.status_filter, 0, 0)
+        row.addWidget(self.results_mode, 0, 1)
+        row.addWidget(self.result_search, 1, 0)
+        row.addWidget(self.result_sort, 1, 1)
+        row.addWidget(button("بحث / تحديث", lambda: self.refresh_results(reset=True)), 1, 2)
         layout.addLayout(row)
         self.result_table = self.make_table(
             [
@@ -688,7 +719,7 @@ class MainWindow(QMainWindow):
         )
         self.results_presentation = ResultsPresentation(self.result_table, (0, 1, 2), "Snapchat")
         layout.addWidget(self.results_presentation)
-        layout.addWidget(self.result_table)
+        layout.addWidget(self.result_table, 1)
         self.result_table.cellDoubleClicked.connect(self.result_details)
         self.result_empty = QLabel("اختر بحثًا لعرض نتائجه. جميع النتائج الحالية محاكاة.")
         self.result_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -711,10 +742,20 @@ class MainWindow(QMainWindow):
     def build_history(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.addWidget(
+            PageHeading(
+                "سناب · السجل والعمليات", "استعادة العمليات المحفوظة وتصدير الأدلة حسب نوع الفحص", "clock"
+            )
+        )
+        jobs_card = Card("العمليات المحفوظة", "layers")
+        layout.addWidget(jobs_card)
+        root_layout = layout
+        layout = jobs_card.body
         self.job_table = self.make_table(
             ["البحث", "حالة التشغيل", "وقت الإنشاء · الرياض", "مدة التشغيل", "مصدر الأسماء"]
         )
-        self.job_table.setMaximumHeight(200)
+        self.job_table.setMaximumHeight(125)
+        self.job_table.setMinimumHeight(80)
         self.job_table.cellDoubleClicked.connect(lambda *_: self.load_selected_job())
         layout.addWidget(self.job_table)
         row = QHBoxLayout()
@@ -723,6 +764,10 @@ class MainWindow(QMainWindow):
         row.addWidget(button("عمليات أقدم", lambda: self.page_jobs(1)))
         row.addWidget(button("عمليات أحدث", lambda: self.page_jobs(-1)))
         layout.addLayout(row)
+        results_card = Card("تاريخ الأسماء", "file")
+        root_layout.addWidget(results_card, 1)
+        layout = results_card.body
+        layout.setAlignment(Qt.AlignmentFlag(0))
         filters = QHBoxLayout()
         self.history_mode = combo([("سجل المحاكاة", "simulated"), ("السجل الحقيقي", "real")])
         self.history_search = text_input("بحث في السجل العام")
@@ -740,7 +785,8 @@ class MainWindow(QMainWindow):
                 "صلاحية المصدر",
             ]
         )
-        layout.addWidget(self.history_table)
+        self.history_table.setMinimumHeight(150)
+        layout.addWidget(self.history_table, 1)
         self.history_empty = QLabel("لا توجد نتائج محفوظة ضمن هذا النوع من الفحص.")
         layout.addWidget(self.history_empty)
         pages = QHBoxLayout()
@@ -755,10 +801,13 @@ class MainWindow(QMainWindow):
         bottom.addWidget(button("نسخة احتياطية SQLite", self.backup_database))
         bottom.addWidget(button("استعادة نسخة احتياطية", self.restore_database))
         layout.addLayout(bottom)
-        layout.addWidget(
-            QLabel("نسخة قاعدة البيانات لا تشمل ملفات TXT الأصلية؛ يلزم إحضار الملفات المطابقة للاستكمال.")
-        )
-        self.search_tabs.addTab(page, "السجل")
+        note = QLabel("نسخة قاعدة البيانات لا تشمل ملفات TXT الأصلية؛ يلزم إحضار الملفات المطابقة للاستكمال.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(page)
+        self.search_tabs.addTab(area, "السجل")
 
     def read_config(self) -> SearchConfig:
         try:
