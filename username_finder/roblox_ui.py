@@ -43,6 +43,7 @@ from .roblox_bulk_ui import BulkPanel
 from .roblox_prefilter_ui import PrefilterPanel
 from .roblox_runner import RobloxRunner
 from .roblox_storage import CHECK_INTERVALS, RobloxStore
+from .ui_cards import Card, CardGrid, Disclosure, ModeStrip, caption, icon
 from .ui_helpers import local_time, style_combo_popup
 
 STATES = {
@@ -100,6 +101,7 @@ class RobloxPanel(QScrollArea):
         self.busy = self.closing = False
         self.stopping = False
         self.current_run = None
+        self.view_progress = (None, None)
         self.preparation_cancel = threading.Event()
         self.preparing = False
         self.preparation_progress.connect(self.preparation_updated)
@@ -117,16 +119,19 @@ class RobloxPanel(QScrollArea):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 10, 16, 12)
         layout.setSpacing(9)
-        title = QLabel("فحص يوزرات Roblox")
-        title.setObjectName("title")
-        layout.addWidget(title)
-        warning = QLabel("نتائج Roblox أولية ولا تضمن التسجيل • لا نطلب بيانات دخول.")
-        warning.setWordWrap(True)
-        warning.setObjectName("simulation")
-        layout.addWidget(warning)
-        self.activity_status = QLabel("جاهز • عمل واحد لكل منصة؛ يمكن تشغيل Roblox وX معًا.")
-        self.activity_status.setWordWrap(True)
-        layout.addWidget(self.activity_status)
+        header = QHBoxLayout()
+        platform_icon = QLabel()
+        platform_icon.setPixmap(icon("roblox", size=42).pixmap(42, 42))
+        header.addWidget(platform_icon)
+        headings = QVBoxLayout()
+        headings.setSpacing(3)
+        headings.addWidget(caption("Roblox · فحص الأسماء", "pageTitle"))
+        headings.addWidget(
+            caption("نتائج التسجيل أولية ولا تضمن الإتاحة • لا نطلب بيانات دخول.", "pageSubtitle")
+        )
+        header.addLayout(headings, 1)
+        layout.addLayout(header)
+        self.activity_status = caption("جاهز • عمل واحد لكل منصة؛ يمكن تشغيل Roblox وX معًا.", "statusPill")
         root_layout = layout
         self.workspace = PlatformWorkspace()
         root_layout.addWidget(self.workspace, 1)
@@ -136,9 +141,11 @@ class RobloxPanel(QScrollArea):
         self.workspace.currentChanged.connect(lambda _: self.queue_refresh())
         self.overnight = OvernightControls(self, "Roblox")
         history_layout.addWidget(self.overnight)
-        input_card = QGroupBox("إعداد فحص فردي · نتائج تسجيل أولية")
-        input_layout.addWidget(input_card)
-        layout = QVBoxLayout(input_card)
+        input_card = Card("الأسماء · توليد أو استيراد", "users")
+        settings_card = Card("إعداد الفحص", "clock")
+        self.input_cards = CardGrid((input_card, settings_card), columns=(2, 1), minimum=350)
+        input_layout.addWidget(self.input_cards)
+        layout = input_card.body
         self.modes = QTabWidget()
         generated = QWidget()
         form = QVBoxLayout(generated)
@@ -153,7 +160,7 @@ class RobloxPanel(QScrollArea):
             generation_fields(self.minimum_length, self.maximum_length, self.quantity),
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute,
         )
-        form.addWidget(QLabel("توليد محلي دون تكرار؛ تبدأ الأسماء بحرف وتتضمن حروفًا وأرقامًا."))
+        form.addWidget(caption("توليد محلي دون تكرار؛ تبدأ الأسماء بحرف وتتضمن حروفًا وأرقامًا."))
         self.modes.addTab(generated, "توليد أسماء")
         imported = QWidget()
         inputs = QVBoxLayout(imported)
@@ -178,12 +185,16 @@ class RobloxPanel(QScrollArea):
         self.modes.currentChanged.connect(self._fit_mode)
         self.files.setVisible(False)
         layout.addWidget(self.modes)
-        self.skip_previous = QCheckBox("تجاوز المفحوص سابقًا (Skip Previously Checked)")
+        layout = settings_card.body
+        self.skip_previous = QCheckBox("تجاوز المفحوص سابقًا")
+        self.skip_previous.setToolTip("Skip Previously Checked — لا نعيد إرسال اسم موجود في سجل Roblox.")
         self.skip_previous.setChecked(True)
         layout.addWidget(self.skip_previous)
         speed_form = QFormLayout()
+        speed_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         speed_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
         self.speed = QComboBox()
+        self.speed.setMaximumWidth(340)
         for label, seconds in zip(
             (
                 "5 ثوانٍ (محافظ / افتراضي)",
@@ -198,7 +209,7 @@ class RobloxPanel(QScrollArea):
             self.speed.addItem(label, seconds)
         style_combo_popup(self.speed)
         self.speed.setToolTip("للعمليات الجديدة فقط؛ تحتفظ العملية المحفوظة بسرعتها عند الاستئناف.")
-        speed_form.addRow("سرعة الفحص (Checking Speed)", self.speed)
+        speed_form.addRow("سرعة الفحص", self.speed)
         layout.addLayout(speed_form)
         self.speed_warning = QLabel(
             "سرعة تجريبية: نجحت الاختبارات القصيرة، لكن استقرار التشغيل الطويل غير مضمون.\n"
@@ -214,7 +225,9 @@ class RobloxPanel(QScrollArea):
         self.preview_label = QLabel("اضغط المعاينة لتقييم الصيغة والتكرار والسجل محليًا دون اتصال.")
         self.preview_label.setTextFormat(Qt.TextFormat.PlainText)
         self.preview_label.setWordWrap(True)
-        layout.addWidget(self.preview_label)
+        preview_card = Card("المعاينة المحلية", "check")
+        preview_card.body.addWidget(self.preview_label)
+        input_layout.addWidget(preview_card)
         input_layout.addStretch()
         actions = QGridLayout()
         self.preview_button = self._button("معاينة محلية", self.preview)
@@ -229,6 +242,7 @@ class RobloxPanel(QScrollArea):
         self.individual_actions = QWidget()
         self.individual_actions.setLayout(actions)
         root_layout.addWidget(self.individual_actions)
+        root_layout.addWidget(self.activity_status)
         self.status = QLabel("جاهز — لا توجد طلبات تلقائية.")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -279,7 +293,18 @@ class RobloxPanel(QScrollArea):
             ["اسم المستخدم", "التصنيف الأولي", "كود API", "آخر فحص", "الفحوص المكتملة", "التغيير", "المصدر"]
         )
         self.result_table.setMinimumHeight(150)
-        self.result_columns = ReadableColumns(self.result_table, self.fill_table)
+        self.result_columns = ReadableColumns(self.result_table, self.fill_table, fill_width=True)
+        preview_results = Card("أحدث النتائج المعروضة", "file")
+        self.input_results = make_table(["اسم المستخدم", "التصنيف الأولي", "آخر فحص"])
+        self.input_results.setMaximumHeight(150)
+        self.input_result_columns = ReadableColumns(self.input_results, self.fill_table, fill_width=True)
+        preview_results.body.addWidget(self.input_results)
+        self.input_results_empty = caption("لا توجد نتائج معروضة بعد. يظل البدء إجراءً صريحًا من المستخدم.")
+        preview_results.body.addWidget(self.input_results_empty)
+        open_results = self._button("فتح النتائج والتصفية ←", lambda: self.workspace.setCurrentIndex(1))
+        open_results.setObjectName("textButton")
+        preview_results.body.addWidget(open_results)
+        input_layout.insertWidget(input_layout.count() - 1, preview_results)
         self.result_query = ResultQueryController(self)
         self.result_query.ready.connect(self._show_results)
         self.result_query.cleared.connect(self._clear_results)
@@ -297,6 +322,9 @@ class RobloxPanel(QScrollArea):
         pages.addWidget(self.page_label, 1)
         pages.addWidget(self.next_button)
         layout.addLayout(pages)
+        self.results_options = Disclosure("التصفية المتقدمة والتصدير")
+        layout.addWidget(self.results_options)
+        layout = self.results_options.body
         layout.addWidget(self.changes_only)
         layout.addWidget(self.advanced_filters)
         self.export_history = QCheckBox("تضمين جميع الملاحظات التاريخية في التصدير")
@@ -309,7 +337,16 @@ class RobloxPanel(QScrollArea):
         self.checking_mode.addItems(["الفحص الفردي (الدقيق)", "البحث الجماعي عن الحسابات Bulk (تجريبي)"])
         self.checking_mode.addItem("تصفية الملفات الكبيرة Bulk — دليل حسابات")
         style_combo_popup(self.checking_mode)
-        root_layout.insertWidget(3, self.checking_mode)
+        self.mode_strip = ModeStrip(
+            self.checking_mode,
+            (
+                ("الفحص الفردي", "check"),
+                ("Bulk المجمّد", "layers"),
+                ("تصفية الملفات الكبيرة", "filter"),
+            ),
+        )
+        self.checking_mode.hide()
+        root_layout.insertWidget(1, self.mode_strip)
         self.bulk = BulkPanel(self)
         self.bulk.idle.connect(self.idle.emit)
         root_layout.addWidget(self.bulk)
@@ -332,6 +369,7 @@ class RobloxPanel(QScrollArea):
         self.individual_actions.setVisible(index == 0)
         self.bulk.setVisible(index == 1)
         self.prefilter.setVisible(index == 2)
+        self.activity_status.setVisible(index == 0)
 
     @staticmethod
     def _button(label, callback):
@@ -688,6 +726,10 @@ class RobloxPanel(QScrollArea):
         self.result_columns.fill([])
         self.page_label.setText(message)
         self.counters.setText(message)
+        self.input_result_columns.fill([])
+        self.input_results.hide()
+        self.input_results_empty.setText(message)
+        self.input_results_empty.show()
         self.previous_button.setEnabled(False)
         self.next_button.setEnabled(False)
 
@@ -714,6 +756,9 @@ class RobloxPanel(QScrollArea):
             for r in self.rows
         ]
         self.result_columns.fill(values)
+        self.input_result_columns.fill([[r[0], r[1], r[3]] for r in values[:3]])
+        self.input_results.setVisible(bool(values))
+        self.input_results_empty.setVisible(not values)
         selected = getattr(self, "_result_selection", None)
         self._result_selection = None
         if selected:
@@ -782,6 +827,7 @@ class RobloxPanel(QScrollArea):
         self.operations.blockSignals(False)
         if self.current_run:
             progress = self.repo.progress(self.current_run)
+            self.view_progress = (self.current_run, progress)
             if progress:
                 done = progress["counts"].get("Done", 0)
                 self.status.setText(

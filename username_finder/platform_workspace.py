@@ -1,6 +1,6 @@
 """Compact Qt workspaces with independently scrollable platform sections."""
 
-from PySide6.QtCore import QObject, QSignalBlocker, QSize, Qt
+from PySide6.QtCore import QEvent, QObject, QSignalBlocker, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -24,7 +24,7 @@ class ResultsPresentation(QWidget):
         self.simple_columns = frozenset(simple_columns)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 4, 0, 4)
-        label = QLabel(platform + " · عرض النتائج")
+        label = QLabel((platform + " · " if platform else "") + "عرض النتائج")
         label.setObjectName("heading")
         layout.addWidget(label)
         layout.addStretch()
@@ -55,6 +55,9 @@ class ResultsPresentation(QWidget):
                         self.table.setColumnWidth(column, width)
                     else:
                         self.table.resizeColumnToContents(column)
+        columns = getattr(self.table, "readable_columns", None)
+        if columns:
+            columns.queue_fit()
 
 
 def generation_fields(minimum, maximum, quantity):
@@ -81,13 +84,20 @@ def generation_fields(minimum, maximum, quantity):
 class ReadableColumns(QObject):
     """Size visible page data fully while retaining deliberate user column widths."""
 
-    def __init__(self, table, fill_table):
+    def __init__(self, table, fill_table, *, fill_width=False):
         super().__init__(table)
         self.table, self.fill_table = table, fill_table
         table.readable_columns = self
         self.filling = False
         self.sized = False
         self.user_widths = {}
+        self.base_widths = {}
+        self.fill_width = fill_width
+        self.fit_timer = QTimer(self)
+        self.fit_timer.setSingleShot(True)
+        self.fit_timer.timeout.connect(self.fit)
+        if fill_width:
+            table.viewport().installEventFilter(self)
         table.horizontalHeader().sectionResized.connect(self.resized)
 
     def resized(self, index, old, new):
@@ -112,6 +122,11 @@ class ReadableColumns(QObject):
                     self.table.setColumnWidth(column, self.user_widths[column])
                 else:
                     self.table.resizeColumnToContents(column)
+                if not self.table.isColumnHidden(column):
+                    header = self.table.horizontalHeader()
+                    self.base_widths[column] = max(
+                        self.table.sizeHintForColumn(column), header.sectionSizeHint(column)
+                    )
                 for row in range(self.table.rowCount()):
                     item = self.table.item(row, column)
                     if item and not item.toolTip():
@@ -120,6 +135,30 @@ class ReadableColumns(QObject):
             self.sized = self.sized or bool(rows)
         finally:
             self.filling = False
+        self.queue_fit()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize:
+            self.queue_fit()
+        return super().eventFilter(watched, event)
+
+    def queue_fit(self):
+        if self.fill_width and not self.fit_timer.isActive():
+            self.fit_timer.start(0)
+
+    def fit(self):
+        if not self.fill_width or self.table.property("simpleResultsView"):
+            return
+        visible = [c for c in range(self.table.columnCount()) if not self.table.isColumnHidden(c)]
+        widths = {c: self.user_widths.get(c, self.base_widths.get(c, 100)) for c in visible}
+        flexible = [c for c in visible if c not in self.user_widths]
+        extra = max(0, self.table.viewport().width() - sum(widths.values()))
+        with QSignalBlocker(self.table.horizontalHeader()):
+            for column in visible:
+                addition = extra // len(flexible) if column in flexible else 0
+                if flexible and column == flexible[-1]:
+                    addition += extra % len(flexible)
+                self.table.setColumnWidth(column, widths[column] + addition)
 
 
 class PlatformWorkspace(QTabWidget):

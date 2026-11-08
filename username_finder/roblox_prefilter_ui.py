@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .roblox_prefilter import Prefilter
+from .ui_cards import Card, CardGrid, Disclosure, icon
 
 STATE_LABELS = {
     "Ready": "جاهزة",
@@ -74,10 +74,13 @@ class PrefilterPanel(QWidget):
         steps_body = QWidget()
         layout = QVBoxLayout(steps_body)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(explanation)
+        explanation_box = Disclosure("كيف نقرأ دليل الحسابات؟")
+        explanation_box.body.addWidget(explanation)
+        layout.addWidget(explanation_box)
         self.steps_area.setWidget(steps_body)
         root_layout.addWidget(self.steps_area, 1)
         self.steps = {}
+        cards = []
         for key, title in (
             ("import", "1 · اختيار الملف واستعادته"),
             ("config", "2 · إعداد الدفعات والتوقيت"),
@@ -87,9 +90,11 @@ class PrefilterPanel(QWidget):
             ("full", "6 · تفويض مستقل لبقية الملف"),
             ("export", "7 · تصدير الفئات ومرشحي الفردي"),
         ):
-            card = QGroupBox(title)
-            self.steps[key] = QVBoxLayout(card)
-            layout.addWidget(card)
+            card = Card(title, "file" if key == "import" else "layers")
+            self.steps[key] = card.body
+            cards.append(card)
+        self.step_cards = CardGrid(cards, columns=(2, 1), minimum=340)
+        layout.addWidget(self.step_cards)
         self.source = QLineEdit()
         self.source.setReadOnly(True)
         self.source.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -130,6 +135,11 @@ class PrefilterPanel(QWidget):
             ("export", "تصدير الفئات ومرشحي الفردي…", self.export),
         ):
             button = QPushButton(label)
+            button.setIcon(
+                icon(
+                    "stop" if name == "stop" else "file" if name in ("file", "export") else "layers", size=18
+                )
+            )
             button.clicked.connect(callback)
             step = {
                 "file": "import",
@@ -257,10 +267,10 @@ class PrefilterPanel(QWidget):
         )
         if not self.busy:
             self.status.setText(
-                data.get("import_error", "الاستيراد: " + data["import_state"])
-                + " • المجلد: "
-                + str(self.service.directory)
+                data.get("import_error")
+                or "الاستيراد: " + STATE_LABELS.get(data["import_state"], data["import_state"])
             )
+            self.status.setToolTip("مجلد العملية: " + str(self.service.directory))
         self.controls()
 
     def choose_file(self):

@@ -41,6 +41,8 @@ def test_platform_filters_full_dataset_reset_export_and_history(
     panel.workspace.setCurrentIndex(1)
     panel.refresh()
     assert len(panel.rows) == 100
+    if hasattr(panel, "results_options"):
+        panel.results_options.setExpanded(True)
     advanced = panel.advanced_filters
     advanced.toggle.click()
     assert advanced.advanced_scroll.isVisible()

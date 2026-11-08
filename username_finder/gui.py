@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -60,6 +59,7 @@ from .scheduling import ScheduleConfig, Scheduler
 from .snapscore_ui import SnapscorePanel
 from .sources import MeaningLibrary, make_snapshot, preview_txt
 from .storage import Store
+from .ui_cards import icon
 from .ui_helpers import REASONS, WheelGuard, local_time, status_text, style_combo_popup
 from .ui_theme import LIGHT_THEME
 from .x_ui import XPanel
@@ -193,7 +193,7 @@ class MainWindow(QMainWindow):
         banner.setWordWrap(True)
         banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header.addWidget(banner, 1)
-        self.page_heading = QLabel("لوحة البداية")
+        self.page_heading = QLabel("لوحة التحكم")
         self.page_heading.setObjectName("heading")
         header.addWidget(self.page_heading)
         layout.addWidget(header_widget)
@@ -204,16 +204,21 @@ class MainWindow(QMainWindow):
         # RTL puts the first widget on the right; existing page instances and indices remain intact.
         self.sidebar = QWidget()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(174)
+        self.sidebar.setFixedWidth(192)
         side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(9, 12, 9, 12)
-        label = QLabel("التنقل")
+        brand = QLabel("Username Finder Bot")
+        brand.setObjectName("sidebarBrand")
+        brand.setWordWrap(True)
+        brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        side.addWidget(brand)
+        label = QLabel("مساحة العمل")
         label.setObjectName("muted")
         side.addWidget(label)
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
         self.navigation.setAccessibleName("التنقل بين مساحات العمل")
-        self.navigation.setIconSize(QSize(18, 18))
+        self.navigation.setIconSize(QSize(23, 23))
         self.navigation.setUniformItemSizes(True)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         side.addWidget(self.navigation, 1)
@@ -254,18 +259,18 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.job_manager, "إدارة العمليات")
         self.tabs.currentChanged.connect(lambda _: self.job_manager.refresh_if_visible())
         self.dashboard = DashboardPanel(self)
-        self.tabs.addTab(self.dashboard, "لوحة البداية")
-        for index, label, icon in (
-            (7, "لوحة البداية", QStyle.StandardPixmap.SP_ComputerIcon),
-            (3, "Roblox", QStyle.StandardPixmap.SP_DialogApplyButton),
-            (1, "Instagram", QStyle.StandardPixmap.SP_FileDialogContentsView),
-            (0, "سناب", QStyle.StandardPixmap.SP_DialogHelpButton),
-            (5, "X · تجريبي", QStyle.StandardPixmap.SP_MessageBoxInformation),
-            (6, "إدارة العمليات", QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            (4, "صانع اليوزرات", QStyle.StandardPixmap.SP_FileIcon),
-            (2, "البحث في الملفات", QStyle.StandardPixmap.SP_DirOpenIcon),
+        self.tabs.addTab(self.dashboard, "لوحة التحكم")
+        for index, label, symbol in (
+            (7, "لوحة التحكم", "home"),
+            (3, "Roblox", "roblox"),
+            (1, "Instagram", "instagram"),
+            (0, "سناب", "snapchat"),
+            (5, "X · تجريبي", "x"),
+            (6, "إدارة العمليات", "layers"),
+            (4, "صانع اليوزرات", "generate"),
+            (2, "بحث الملفات", "search"),
         ):
-            item = QListWidgetItem(self.style().standardIcon(icon), label)
+            item = QListWidgetItem(icon(symbol, size=23), label)
             item.setData(Qt.ItemDataRole.UserRole, index)
             item.setToolTip(self.tabs.tabText(index))
             item.setSizeHint(QSize(150, 42))
@@ -291,6 +296,11 @@ class MainWindow(QMainWindow):
         from .overnight_ui import schedule_startup_recovery
 
         schedule_startup_recovery(self)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "sidebar"):
+            self.sidebar.setFixedWidth(168 if self.width() < 1050 else 192)
 
     def navigate(self, row):
         item = self.navigation.item(row)

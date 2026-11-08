@@ -2,28 +2,33 @@
 
 import sqlite3
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QGridLayout,
     QHBoxLayout,
-    QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from . import x
 from .overnight import STATES as OVERNIGHT_STATES
 from .platform_workspace import ReadableColumns
 from .roblox_ui import STATES as ROBLOX_STATES
+from .ui_cards import Card, caption, icon
 from .windows_awake import AwakeRequest
 from .x_ui import STATES as X_STATES
 
 
 class JobManagerPanel(QWidget):
+    view_changed = Signal()
     page_size = 20
 
     def __init__(self, window):
@@ -33,76 +38,96 @@ class JobManagerPanel(QWidget):
         self.rows = []
         self.offset = 0
         self.awake = AwakeRequest()
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 10, 16, 12)
-        layout.setSpacing(9)
-        title = QLabel("إدارة العمليات")
-        title.setObjectName("title")
-        layout.addWidget(title)
-        hint = QLabel("عمل واحد لكل منصة • يمكن تشغيل Roblox وX معًا • الإيقاف يحفظ النتائج المكتملة.")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        self.summary = QLabel()
-        self.summary.setObjectName("metric")
-        self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
-        self.search_results_button = QPushButton("بحث موحّد في نتائج Roblox وX المحفوظة…")
-        self.search_results_button.clicked.connect(self.search_results)
-        layout.addWidget(self.search_results_button)
-        overnight_actions = QHBoxLayout()
-        self.preflight_button = QPushButton("فحص جاهزية التشغيل الليلي")
-        self.preflight_button.clicked.connect(self.preflight)
-        self.keep_awake = QCheckBox("منع السكون التلقائي أثناء التشغيل الليلي")
-        self.keep_awake.setToolTip(
-            "اختياري لهذه الجلسة؛ لا يمنع إطفاء الشاشة أو السكون اليدوي أو إغلاق الغطاء. "
-            "لا يغيّر إعدادات طاقة Windows."
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 8, 12, 8)
+        root.setSpacing(8)
+        layout = root
+        header = QHBoxLayout()
+        header.addWidget(caption("إدارة العمليات", "pageTitle"), 1)
+        self.summary = caption("", "statusPill")
+        header.addWidget(self.summary)
+        layout.addLayout(header)
+        layout.addWidget(
+            caption("تابع التقدم المحفوظ، وافتح العملية أو أوقفها بأمان. عمل واحد لكل منصة.", "pageSubtitle")
         )
-        self.keep_awake.toggled.connect(self.update_power)
-        overnight_actions.addWidget(self.preflight_button)
-        overnight_actions.addWidget(self.keep_awake)
-        layout.addLayout(overnight_actions)
-        self.sleep_status = QLabel()
-        self.sleep_status.setWordWrap(True)
-        layout.addWidget(self.sleep_status)
+        toolbar = QHBoxLayout()
+        self.search_results_button = QPushButton("سجل النتائج المحفوظة")
+        self.search_results_button.setIcon(icon("file", size=19))
+        self.search_results_button.clicked.connect(self.search_results)
+        toolbar.addWidget(self.search_results_button)
+        self.preflight_button = QPushButton("جاهزية التشغيل الليلي")
+        self.preflight_button.setIcon(icon("check", size=19))
+        self.preflight_button.clicked.connect(self.preflight)
+        toolbar.addWidget(self.preflight_button)
+        self.power_button = QPushButton("الطاقة")
+        self.power_menu = QMenu(self)
+        self.power_button.setMenu(self.power_menu)
+        toolbar.addWidget(self.power_button)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        table_card = Card("العمليات المحفوظة", "layers", shadow=True)
         self.table = window.make_table(
             ["المنصة", "العملية", "الحالة", "المكتمل / الإجمالي", "تجاوز سابق", "الفاصل"]
         )
+        self.table.setMinimumHeight(100)
+        table_card.body.setAlignment(Qt.AlignmentFlag(0))
         self.table.itemSelectionChanged.connect(self.show_selected)
-        self.columns = ReadableColumns(self.table, window.fill_table)
-        layout.addWidget(self.table, 1)
-        self.empty = QLabel("لا توجد عمليات بعد. افتح Roblox أو X لتحضير عملية جديدة.")
+        self.columns = ReadableColumns(self.table, window.fill_table, fill_width=True)
+        table_card.body.addWidget(self.table, 1)
+        self.empty = caption("لا توجد عمليات بعد.\nافتح Roblox أو X لتحضير عملية جديدة.", "emptyTitle")
+        self.empty.setMinimumHeight(100)
         self.empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty.setWordWrap(True)
-        layout.addWidget(self.empty, 1)
-        self.details = QLabel("حدد عملية لعرض نتائجها واتصالها وأي قيد محفوظ.")
-        self.details.setTextFormat(Qt.TextFormat.PlainText)
-        self.details.setWordWrap(True)
-        layout.addWidget(self.details)
+        table_card.body.addWidget(self.empty)
+        layout.addWidget(table_card, 1)
+        self.details = caption("حدد عملية لعرض نتائجها واتصالها وأي قيد محفوظ.", "selectionDetails")
+        self.detail_area = QScrollArea()
+        self.detail_area.setWidgetResizable(True)
+        self.detail_area.setFixedHeight(50)
+        self.detail_area.setWidget(self.details)
+        power_content = QWidget()
+        power_layout = QVBoxLayout(power_content)
+        power_content.setMaximumWidth(420)
+        power_action = QWidgetAction(self.power_menu)
+        power_action.setDefaultWidget(power_content)
+        self.power_menu.addAction(power_action)
+        self.keep_awake = QCheckBox("منع السكون التلقائي أثناء التشغيل الليلي")
+        self.keep_awake.setToolTip(
+            "اختياري لهذه الجلسة؛ لا يمنع إطفاء الشاشة أو السكون اليدوي أو إغلاق الغطاء."
+        )
+        self.keep_awake.toggled.connect(self.update_power)
+        power_layout.addWidget(self.keep_awake)
+        self.sleep_status = caption("")
+        power_layout.addWidget(self.sleep_status)
+        root.addWidget(self.detail_area)
         actions = QGridLayout()
         self.open_button = QPushButton("فتح المنصة")
-        self.start_button = QPushButton("بدء / استئناف المحددة")
+        self.start_button = QPushButton("بدء / استئناف")
+        self.start_button.setToolTip("بدء أو استئناف العملية المحددة فقط")
+        self.start_button.setObjectName("primary")
         self.stop_button = QPushButton("إيقاف المحددة")
-        self.overnight_button = QPushButton("التشغيل الليلي للمحددة")
+        self.stop_button.setObjectName("danger")
+        self.overnight_button = QPushButton("تشغيل ليلي")
+        self.overnight_button.setToolTip("إعداد التشغيل الليلي للعملية المحددة")
         for index, (button, callback) in enumerate(
             (
                 (self.open_button, self.open_selected),
                 (self.start_button, self.start_selected),
                 (self.stop_button, self.stop_selected),
+                (self.overnight_button, self.overnight_selected),
             )
         ):
             button.clicked.connect(callback)
             actions.addWidget(button, 0, index)
-        layout.addLayout(actions)
-        self.overnight_button.clicked.connect(self.overnight_selected)
-        actions.addWidget(self.overnight_button, 1, 0, 1, 3)
+        root.addLayout(actions)
         pages = QHBoxLayout()
         self.previous_button, self.next_button = QPushButton("السابق"), QPushButton("التالي")
         self.previous_button.clicked.connect(lambda: self.page(-1))
         self.next_button.clicked.connect(lambda: self.page(1))
-        self.page_label = QLabel()
-        for widget in (self.previous_button, self.page_label, self.next_button):
-            pages.addWidget(widget)
-        layout.addLayout(pages)
+        self.page_label = caption("")
+        pages.addWidget(self.previous_button)
+        pages.addWidget(self.page_label, 1)
+        pages.addWidget(self.next_button)
+        root.addLayout(pages)
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
         self.timer.timeout.connect(self.refresh_if_visible)
@@ -282,6 +307,8 @@ class JobManagerPanel(QWidget):
             self.table.item(index, 1).setToolTip(row["id"])
             if row["state"] == "Running" and row["total"] > 0:
                 progress = QProgressBar()
+                progress.setMinimumWidth(0)
+                progress.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
                 progress.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
                 progress.setRange(0, 1000)
                 progress.setValue(min(1000, row["done"] * 1000 // row["total"]))
@@ -313,6 +340,7 @@ class JobManagerPanel(QWidget):
             )
         )
         self.show_selected()
+        self.view_changed.emit()
 
     def selected(self):
         index = self.table.currentRow()

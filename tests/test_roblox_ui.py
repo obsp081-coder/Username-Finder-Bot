@@ -49,7 +49,7 @@ def test_navigation_rtl_and_supported_sizes_without_automatic_requests(window, q
         "صانع ملفات اليوزرات",
         "X — تجريبي",
         "إدارة العمليات",
-        "لوحة البداية",
+        "لوحة التحكم",
     ]
     original = [window.search_tabs.widget(i) for i in range(4)]
     window.tabs.setCurrentIndex(3)

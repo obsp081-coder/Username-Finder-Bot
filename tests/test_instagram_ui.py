@@ -37,7 +37,7 @@ def test_independent_instagram_tab_rtl_manual_preview_and_disabled_verification(
         "صانع ملفات اليوزرات",
         "X — تجريبي",
         "إدارة العمليات",
-        "لوحة البداية",
+        "لوحة التحكم",
     ]
     ui.tabs.setCurrentIndex(1)
     panel = ui.instagram
