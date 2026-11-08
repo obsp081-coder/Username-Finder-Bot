@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import roblox_protocol as protocol
 from .overnight_ui import OvernightControls
 from .platform_workspace import PlatformWorkspace, ReadableColumns, generation_fields
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController
@@ -81,7 +80,7 @@ class RobloxPanel(QScrollArea):
         self.repo = RobloxStore(store)
         self.repo.recover()
         self.make_table, self.fill_table = make_table, fill_table
-        self.fetcher = fetcher or protocol.fetch
+        self.fetcher = fetcher
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="roblox")
         self.runner = None
         self.busy = self.closing = False
@@ -120,6 +119,7 @@ class RobloxPanel(QScrollArea):
         input_layout = self.workspace.add_page("الأسماء والإعدادات")
         results_layout = self.workspace.add_page("النتائج", expand=True)
         history_layout = self.workspace.add_page("العمليات والسجل")
+        self.workspace.currentChanged.connect(lambda _: self.queue_refresh())
         self.overnight = OvernightControls(self, "Roblox")
         history_layout.addWidget(self.overnight)
         layout = input_layout
@@ -692,6 +692,10 @@ class RobloxPanel(QScrollArea):
         if not self.closing and not self.refresh_timer.isActive():
             self.refresh_timer.start()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.queue_refresh()
+
     def refresh(self):
         if self.busy and self.preparing:
             if hasattr(self, "_preparation_snapshot"):
@@ -701,14 +705,19 @@ class RobloxPanel(QScrollArea):
         self.speed.setCurrentIndex(self.speed.findData(self.repo.preferred_interval()))
         self.speed.blockSignals(False)
         self.show_effective_speed()
-        counts = self.repo.counts()
-        self.counters.setText(" • ".join(f"{label}: {counts.get(key, 0):,}" for key, label in LABELS.items()))
+        if not self.busy or self.isVisible():
+            counts = self.repo.counts()
+            self.counters.setText(
+                " • ".join(f"{label}: {counts.get(key, 0):,}" for key, label in LABELS.items())
+            )
         try:
             filters = self.advanced_filters.filters()
         except ValueError as exc:
             self.result_query.cancel(str(exc))
         else:
-            if self.advanced_filters.is_default():
+            if self.busy and (not self.isVisible() or self.workspace.currentIndex() != 1):
+                self.result_query.cancel(None)
+            elif self.advanced_filters.is_default():
                 self.result_query.cancel(None)
                 rows, total = self.repo.results(offset=self.offset)
                 self._show_results(rows, total, self.offset)

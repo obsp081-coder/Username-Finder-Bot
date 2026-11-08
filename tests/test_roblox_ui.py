@@ -27,6 +27,7 @@ def window(qtbot, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(MainWindow, "unsaved_choice", lambda _: QMessageBox.StandardButton.Discard)
     ui = MainWindow(tmp_path / "gui.db")
+    ui.roblox.fetcher = fetch
     ui.roblox.test_calls = calls
     qtbot.addWidget(ui)
     ui.show()
@@ -102,6 +103,34 @@ def test_generation_works_and_results_filter(window, qtbot):
     panel.class_filter.setCurrentIndex(panel.class_filter.findData("Available"))
     panel.search.setText(panel.test_calls[0])
     qtbot.waitUntil(lambda: panel.result_table.rowCount() == 1)
+
+
+def test_running_hidden_results_are_deferred_and_refreshed_when_shown(window, qtbot, monkeypatch):
+    panel = window.roblox
+    window.tabs.setCurrentWidget(panel)
+    calls = []
+    original = panel.repo.results
+
+    def results(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(panel.repo, "results", results)
+    panel.busy = True
+    try:
+        panel.workspace.setCurrentIndex(0)
+        panel.refresh()
+        assert not calls
+        panel.workspace.setCurrentIndex(1)
+        qtbot.waitUntil(lambda: bool(calls))
+        calls.clear()
+        window.tabs.setCurrentWidget(window.x_panel)
+        panel.refresh()
+        assert not calls
+        window.tabs.setCurrentWidget(panel)
+        qtbot.waitUntil(lambda: bool(calls))
+    finally:
+        panel.busy = False
 
 
 def test_range_preview_shows_lengths_and_checks_total(window, qtbot):

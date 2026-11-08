@@ -7,6 +7,7 @@ import json
 import socket
 import ssl
 import urllib.error
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -198,16 +199,25 @@ class OvernightStore:
             self._save(db, identity, data, "retry_scheduled", at=finished)
             return True
 
-    def requesting(self, task, *, clock=now):
-        with self.store.transaction() as db:
+    def requesting(self, task, *, clock=now, db=None):
+        with self.store.transaction() if db is None else nullcontext(db) as db:
             data = self._read(db, task["run_id"])
             if not data or not data["enabled"] or not data.get("auto_resume"):
                 return
-            if data.get("retry_at") and not data.get("retry_started"):
+            retry_started = bool(data.get("retry_at") and not data.get("retry_started"))
+            if retry_started:
                 data["retries_performed"] = data.get("retries_performed", 0) + 1
                 data["retry_started"] = True
             data.update(state="Running", waiting_until=None)
             self._save(db, task["run_id"], data, at=clock())
+            return retry_started
+
+    def unstarted(self, task, *, db):
+        """Undo only this claim's retry counter when cancellation precedes dispatch."""
+        data = self._read(db, task["run_id"])
+        if data and data.get("position") == task["position"] and data.get("retry_started"):
+            data.update(retry_started=False, retries_performed=max(0, data.get("retries_performed", 0) - 1))
+            self._save(db, task["run_id"], data)
 
     def deadline(self, identity, control):
         data = self.get(identity) or {}
@@ -223,8 +233,8 @@ class OvernightStore:
                 data.update(state=state, waiting_until=deadline)
                 self._save(db, identity, data, at=clock())
 
-    def success(self, identity, *, clock=now):
-        with self.store.transaction() as db:
+    def success(self, identity, *, clock=now, db=None):
+        with self.store.transaction() if db is None else nullcontext(db) as db:
             data = self._read(db, identity)
             if not data or not data["enabled"] or not data.get("auto_resume"):
                 return

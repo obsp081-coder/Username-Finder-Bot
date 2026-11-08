@@ -116,9 +116,17 @@ class RobloxStore:
             preliminary=True,
             independently_verified_classification="Unknown",
         )
+        latest = db.execute(
+            "SELECT c.checked_at,c.classification,n.completed_checks FROM roblox_names n "
+            "JOIN roblox_checks c ON c.id=n.latest_id WHERE n.username_key=?",
+            (key,),
+        ).fetchone()
+        chronological = latest is None or result["checked_at"] >= latest["checked_at"]
+        previous = latest["classification"] if latest and chronological else None
         cursor = db.execute(
             """INSERT INTO roblox_checks(username_key,username,checked_at,classification,api_code,
-            evidence,source,source_key,fingerprint,completed,run_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            evidence,source,source_key,fingerprint,completed,run_id,previous_classification,changed)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 key,
                 name,
@@ -131,8 +139,19 @@ class RobloxStore:
                 fingerprint(result),
                 int(completed),
                 run_id,
+                previous,
+                int(previous is not None and previous != result["classification"]),
             ),
         )
+        if chronological:
+            # Normal checks append to history. Earlier imported observations still
+            # take the full ordering path below, preserving historical changes.
+            db.execute(
+                "INSERT INTO roblox_names VALUES(?,?,?,?) ON CONFLICT(username_key) DO UPDATE SET "
+                "username=excluded.username,latest_id=excluded.latest_id,completed_checks=excluded.completed_checks",
+                (key, name, cursor.lastrowid, (latest["completed_checks"] if latest else 0) + int(completed)),
+            )
+            return cursor.lastrowid
         ordered = db.execute(
             "SELECT id,classification FROM roblox_checks WHERE username_key=? ORDER BY checked_at,id", (key,)
         ).fetchall()
@@ -432,7 +451,7 @@ class RobloxStore:
         with self.store.lock:
             return self._control(self.store.db)
 
-    def claim_next(self, run_id):
+    def claim_next(self, run_id, *, night=None, clock=None):
         with self.store.transaction() as db:
             run = db.execute("SELECT * FROM roblox_runs WHERE id=?", (run_id,)).fetchone()
             if not run or run["state"] != "Running":
@@ -460,7 +479,10 @@ class RobloxStore:
                     "UPDATE roblox_queue SET state='InFlight' WHERE run_id=? AND position=?",
                     (run_id, row["position"]),
                 )
-                return dict(row)
+                task = dict(row)
+                if night is not None and night.requesting(task, clock=clock, db=db):
+                    task["_night_retry_started"] = True
+                return task
 
     def has_pending(self, run_id):
         with self.store.lock:
@@ -471,14 +493,18 @@ class RobloxStore:
                 is not None
             )
 
-    def release_unstarted(self, task):
+    def release_unstarted(self, task, *, night=None):
         with self.store.transaction() as db:
-            db.execute(
+            released = db.execute(
                 "UPDATE roblox_queue SET state='Pending' WHERE run_id=? AND position=? AND state='InFlight'",
                 (task["run_id"], task["position"]),
-            )
+            ).rowcount
+            if released and night is not None and task.get("_night_retry_started"):
+                night.unstarted(task, db=db)
 
-    def finish_check(self, task, result, *, control_update=None, response_finished_at=None):
+    def finish_check(
+        self, task, result, *, control_update=None, response_finished_at=None, night=None, clock=None
+    ):
         response_finished_at = response_finished_at or datetime.now(UTC)
         with self.store.transaction() as db:
             state = db.execute(
@@ -505,6 +531,8 @@ class RobloxStore:
             )
             self._save_control(db, control)
             db.execute("UPDATE roblox_runs SET updated_at=? WHERE id=?", (now(), task["run_id"]))
+            if night is not None and result["classification"] != "Unknown":
+                night.success(task["run_id"], clock=clock, db=db)
 
     def end(self, run_id, state, error=""):
         with self.store.transaction() as db:
@@ -576,9 +604,13 @@ class RobloxStore:
         with self.store.lock:
             total = self.store.db.execute("SELECT COUNT(*)" + base, args).fetchone()[0]
             rows = self.store.db.execute(
-                "SELECT c.*,n.completed_checks"
+                # Sort only IDs/counters; hydrate evidence for the bounded page.
+                # Sorting every full JSON observation was costly on large histories.
+                "WITH page AS MATERIALIZED (SELECT c.id,n.completed_checks"
                 + base
-                + " ORDER BY c.checked_at DESC,c.id DESC LIMIT ? OFFSET ?",
+                + " ORDER BY c.checked_at DESC,c.id DESC LIMIT ? OFFSET ?) "
+                "SELECT c.*,page.completed_checks FROM page JOIN roblox_checks c ON c.id=page.id "
+                "ORDER BY c.checked_at DESC,c.id DESC",
                 [*args, limit, offset],
             ).fetchall()
             return [dict(r) for r in rows], total

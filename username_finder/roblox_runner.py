@@ -13,7 +13,7 @@ from .roblox import result_for, retry_not_before
 class RobloxRunner:
     def __init__(self, repository, *, fetcher=None, wait=None, updated=lambda: None, clock=None):
         self.repository = repository
-        self.fetcher = fetcher or protocol.fetch
+        self.fetcher = fetcher
         self.wait = wait
         self.updated = updated
         self.clock = clock or (lambda: datetime.now(UTC))
@@ -25,6 +25,7 @@ class RobloxRunner:
     def run(self, run_id, *, automatic=False):
         repo = self.repository
         started = False
+        transport = None
         state, error = "Paused", ""
         try:
             if automatic and not self.night.may_resume(run_id):
@@ -32,6 +33,9 @@ class RobloxRunner:
             if self.cancel.is_set() or not repo.start(run_id):
                 return
             started = True
+            if self.fetcher is None:
+                transport = protocol.PersistentTransport()
+            fetch = self.fetcher if self.fetcher is not None else transport.fetch
             self.night.begin(run_id, automatic=automatic, clock=self.clock, cancel=self.cancel)
             while not self.cancel.is_set():
                 if not repo.has_pending(run_id):
@@ -54,17 +58,16 @@ class RobloxRunner:
                         break
                 if self.cancel.is_set():
                     break
-                task = repo.claim_next(run_id)
+                task = repo.claim_next(run_id, night=self.night, clock=self.clock)
                 if task is None:
                     state = "Completed"
                     break
                 if self.cancel.is_set():
-                    repo.release_unstarted(task)
+                    repo.release_unstarted(task, night=self.night)
                     break
                 request_at = self.clock().isoformat()
-                self.night.requesting(task, clock=self.clock)
                 try:
-                    response = self.fetcher(protocol.request_url(task["username"]))
+                    response = fetch(protocol.request_url(task["username"]))
                 except Exception as exc:
                     # Preserve an uncertain outcome instead of repeating the external request.
                     response = transport_failure(
@@ -114,12 +117,15 @@ class RobloxRunner:
                     updates["blocked"] = True
                     state, error = "Restricted", "consecutive_unknown_review_required"
                 repo.finish_check(
-                    task, result, control_update=updates, response_finished_at=response_finished_at
+                    task,
+                    result,
+                    control_update=updates,
+                    response_finished_at=response_finished_at,
+                    night=self.night,
+                    clock=self.clock,
                 )
                 night = self.night.get(run_id)
-                if result["classification"] != "Unknown":
-                    self.night.success(run_id, clock=self.clock)
-                elif night and night["enabled"]:
+                if result["classification"] == "Unknown" and night and night["enabled"]:
                     state, error = "Restricted", "overnight_unknown_review_required"
                 self.updated()
                 if restricted or unknown_streak >= 2 or state == "Restricted":
@@ -131,6 +137,8 @@ class RobloxRunner:
             else:
                 raise
         finally:
+            if transport is not None:
+                transport.close()
             if started:
                 if self.disable_overnight.is_set():
                     self.night.enable(run_id, False)

@@ -376,8 +376,8 @@ def test_cancellation_between_durable_claim_and_request_does_not_send(repository
     runner = RobloxRunner(repository, fetcher=lambda _: pytest.fail("Cancelled before request"))
     actual = repository.claim_next
 
-    def claim(run_id):
-        task = actual(run_id)
+    def claim(run_id, **kwargs):
+        task = actual(run_id, **kwargs)
         runner.cancel.set()
         return task
 
