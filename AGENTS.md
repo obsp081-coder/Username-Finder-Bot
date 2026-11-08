@@ -8,3 +8,15 @@
 - Preserve detailed historical sections and evidence. Keep the handoff concise instead of duplicating long history; explain superseded facts without erasing the original record. Do not create competing handoff documents.
 - ChatGPT-only research and decisions must be explicitly supplied to Codex. Never infer access to other conversations; distinguish user-reported findings from repository-documented evidence and new verification.
 - Documentation-only changes require content and Markdown review, not pytest, Ruff, compileall, GUI tests, or live probes. Respect the user's approved scope and keep tool usage efficient.
+
+## Git Commit and Push Workflow
+
+- After successfully completing an explicitly approved development or documentation task, automatically commit and push its approved changes. This authorization excludes exploratory research and unapproved modifications.
+- Complete the implementation, run appropriate verification, and update `PROGRESS.md` when existing rules require it. Use lightweight content/Markdown checks for documentation-only tasks; keep checks proportional and avoid redundant runs.
+- Inspect `git status`, the intended diff, the staged index, the existing remote, intended branch and any outgoing commits. Use the existing GitHub repository `https://github.com/obsp081-coder/Username-Finder-Bot`; do not create another repository or remote or publish unrelated outgoing commits.
+- Stage only explicitly named files or hunks belonging to the approved task. Never indiscriminately use `git add -A` or `git add .`, include unrelated changes, or discard/overwrite user work. Preserve unrelated staged changes without including them in the task commit.
+- This repository is PUBLIC. Review the actual staged diff and file contents for secrets and private data; do not rely on `.gitignore` alone.
+- Never commit or push `runtime/`, user databases, SQLite WAL/SHM files, virtual environments, generated username lists, large exports, passwords, tokens, API credentials, sessions, private user data or temporary diagnostic files, even if already tracked.
+- When verification and the staged review pass, create a descriptive commit containing only the approved changes and push it to the verified existing remote and intended branch. Never force-push, automatically rewrite history, or bypass authentication or permissions.
+- Verify successful delivery from the push result and the remote branch SHA; report the commit SHA and verified push status. Never claim success without verification.
+- If work is incomplete, relevant verification fails, sensitive data is found, or conflicts/authentication/permission errors occur, preserve the work and report the blocker. Do not commit or upload incomplete or unsafe changes, or push changes with known relevant test failures.
