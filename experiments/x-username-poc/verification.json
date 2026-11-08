@@ -1,0 +1,30 @@
+{
+  "local_tests_passed": 22,
+  "unit_test_seconds": 2.538,
+  "static_checks": [
+    "Ruff check",
+    "Ruff format --check",
+    "compileall"
+  ],
+  "commands_executed_without_network": [
+    "prepare",
+    "report"
+  ],
+  "live_availability_requests": 0,
+  "manual_confirmations": 0,
+  "prepared_candidates": 100,
+  "stages": {
+    "1": 5,
+    "2": 15,
+    "3": 80
+  },
+  "categories": {
+    "existing_account_candidate": 5,
+    "valid_short": 23,
+    "valid_long": 21,
+    "restricted_looking": 5,
+    "invalid_format": 6,
+    "random_valid": 40
+  },
+  "application_source_modified": false
+}

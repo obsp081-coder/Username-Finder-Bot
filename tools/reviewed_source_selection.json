@@ -1,0 +1,15 @@
+{
+  "reviewed_at": "2026-11-05",
+  "method": "Manual token selection from publisher pages read using the browsing tool; direct bulk download denied with HTTP 403. No access-control workarounds used.",
+  "english_names": {
+    "url": "https://www.ssa.gov/oact/babynames/decades/names2020s.html",
+    "version": "SSA-2020-2025-top-30-selection",
+    "tokens": ["liam", "olivia", "noah", "emma", "oliver", "charlotte", "james", "amelia", "elijah", "sophia", "william", "mia", "henry", "isabella", "lucas", "ava", "theodore", "evelyn", "benjamin", "harper", "mateo", "luna", "levi", "camila", "sebastian", "sofia", "jack", "eleanor", "daniel", "elizabeth", "michael", "gianna", "alexander", "scarlett", "ethan", "violet", "samuel", "ella", "owen", "emily", "john", "chloe", "asher", "abigail", "ezra", "aria", "leo", "penelope", "jackson", "aurora", "mason", "hazel", "hudson", "avery", "joseph", "nora", "david", "lily", "jacob", "ellie"]
+  },
+  "arabic_names_latin": {
+    "url": "https://www.bayanatlabs.com/open/arabic-latin-name-variants",
+    "version": "Bayanat-v0.1.0-published-Muhammad-variants",
+    "tokens": ["muhammad", "mohamed", "mohammed", "mohammad", "muhammed"],
+    "reference": "Publisher page, Key numbers: five leading Latin variants of the personal name محمد. No page prose redistributed."
+  }
+}

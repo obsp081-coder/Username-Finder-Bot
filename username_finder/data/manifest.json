@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "packages": [
+    {
+      "id": "english_names-curated-v1",
+      "category": "english_names",
+      "version": "SSA-2020-2025-top-30-selection",
+      "file": "english_names.json",
+      "sha256": "f1aa147c39908079d0c8fbbbaf382909c94ee86306ee5c29614d60628723a343",
+      "source_url": "https://www.ssa.gov/oact/babynames/decades/names2020s.html",
+      "source_sha256": "selection:4cf43993ea4defb029afcf41a71233ed1509acfb23ed7344cf4bf2a94e8c19e3",
+      "license": "US federal government public data",
+      "attribution": "US Social Security Administration, names 2020–2025; manually reviewed subset of published table (bulk ZIP returned 403)",
+      "extracted_at": "2026-11-05",
+      "count": 60,
+      "changes": "Small manually selected allowlist; ASCII lowercase; syntax and upstream membership checked.",
+      "coverage": "Curated starter subset; not comprehensive; no frequency scores or availability claims."
+    },
+    {
+      "id": "english_words-curated-v1",
+      "category": "english_words",
+      "version": "OEWN-2025",
+      "file": "english_words.json",
+      "sha256": "4b7fa3f62edebb8721c155a322d5fabd1dd8552b513752c5241db6c414d7a3ba",
+      "source_url": "https://en-word.net/downloads",
+      "source_sha256": "9ca6d1dcb75f822fdd66617f7d9da48142ace38dd544d6ad5e2feca1674ad3fe",
+      "license": "CC BY 4.0",
+      "attribution": "Open English WordNet Community, derived from Princeton WordNet. https://github.com/globalwordnet/english-wordnet ; https://creativecommons.org/licenses/by/4.0/",
+      "extracted_at": "2026-11-05",
+      "count": 110,
+      "changes": "Small manually selected allowlist; ASCII lowercase; syntax and upstream membership checked.",
+      "coverage": "Curated starter subset; not comprehensive; no frequency scores or availability claims."
+    },
+    {
+      "id": "arabic_names_latin-curated-v1",
+      "category": "arabic_names_latin",
+      "version": "Bayanat-v0.1.0",
+      "file": "arabic_names_latin.json",
+      "sha256": "cc067d0d4a7a005d149ea3c31f8c7c5cf21f518730a57d94b31e56dcef81b69d",
+      "source_url": "https://www.bayanatlabs.com/open/arabic-latin-name-variants",
+      "source_sha256": "selection:4cf43993ea4defb029afcf41a71233ed1509acfb23ed7344cf4bf2a94e8c19e3",
+      "license": "CC0 1.0 (data); no page prose redistributed",
+      "attribution": "Bayanat Labs; derived from Wikidata",
+      "extracted_at": "2026-11-05",
+      "count": 5,
+      "changes": "Small manually selected allowlist; ASCII lowercase; syntax and upstream membership checked.",
+      "coverage": "Curated starter subset; not comprehensive; no frequency scores or availability claims."
+    },
+    {
+      "id": "gaming_terms-curated-v1",
+      "category": "gaming_terms",
+      "version": "curated-2026-11-05",
+      "file": "gaming_terms.json",
+      "sha256": "c9e65484ff0568aaeb4eb7ef3d31d93c4a24ebd209f5bbf1a707a2e31b250cf7",
+      "source_url": "https://dev.epicgames.com/documentation/en-us/fortnite/",
+      "source_sha256": "independent",
+      "license": "CC0 1.0 (independent token selection only)",
+      "attribution": "Username Finder Bot contributors; links document terminology, no publisher prose copied",
+      "extracted_at": "2026-11-05",
+      "count": 4,
+      "changes": "Small manually selected allowlist; ASCII lowercase; syntax and upstream membership checked.",
+      "coverage": "Curated starter subset; not comprehensive; no frequency scores or availability claims."
+    }
+  ]
+}

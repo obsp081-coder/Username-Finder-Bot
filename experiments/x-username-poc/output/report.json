@@ -1,0 +1,209 @@
+{
+  "live_accuracy_independently_verified": false,
+  "blocked": null,
+  "last_stop_reason": "stage_completed",
+  "classification_reviews": [
+    {
+      "position": 2,
+      "original_sha256": "bfcdb2f896be2b3edf89c03390f10696237bc10bd169528aaad4ed4bf2804ae0",
+      "original_classification": "Unknown",
+      "original_reason": "unrecognized_or_contradictory_pair",
+      "classification": "Reserved",
+      "reason": "preliminary_api_is_banned_word_rejection_not_account_ownership",
+      "reviewed_at": "2026-11-07T15:31:47.575131+00:00"
+    },
+    {
+      "position": 8,
+      "original_sha256": "dc923a5ce3fcc82d3285c7e272e938a19bea46ae63aef206adb775776e2001c1",
+      "original_classification": "Unknown",
+      "original_reason": "unrecognized_or_contradictory_pair",
+      "classification": "Reserved",
+      "reason": "preliminary_api_contains_banned_word_rejection_not_account_ownership",
+      "reviewed_at": "2026-11-07T15:52:16.830720+00:00"
+    },
+    {
+      "position": 13,
+      "original_sha256": "eb9cefc73cc84dbd1dfd1539bb10c8dfd604d69d817d97cfc041447ac1ebbaa8",
+      "original_classification": "Unknown",
+      "original_reason": "unrecognized_or_contradictory_pair",
+      "classification": "Invalid",
+      "reason": "preliminary_api_improper_format_syntax_rejection_not_ownership_or_availability",
+      "reviewed_at": "2026-11-07T16:02:12.388067+00:00"
+    },
+    {
+      "position": 14,
+      "original_sha256": "9710c1416aafd48a8af7ea69eaba9ff24dd38c47e34a402a176ab904bfd24111",
+      "original_classification": "Unknown",
+      "original_reason": "unrecognized_or_contradictory_pair",
+      "classification": "Invalid",
+      "reason": "preliminary_api_invalid_username_explicit_short_length_rejection",
+      "reviewed_at": "2026-11-07T17:14:46.995395+00:00"
+    },
+    {
+      "position": 15,
+      "original_sha256": "65257631aa22c1e4903730e3cf3dc366263b20028779c07a8bda77eaaa9e2d4e",
+      "original_classification": "Unknown",
+      "original_reason": "unsupported_or_contradictory_invalid_username_evidence",
+      "classification": "Invalid",
+      "reason": "preliminary_api_invalid_username_explicit_long_length_rejection",
+      "reviewed_at": "2026-11-07T17:34:02.077744+00:00"
+    }
+  ],
+  "stages": {
+    "1": {
+      "planned": 5,
+      "attempted_unique": 5,
+      "completed_responses": 5,
+      "classification_counts": {
+        "Available": 1,
+        "Taken": 2,
+        "Reserved": 2,
+        "Invalid": 0,
+        "Unknown": 0
+      },
+      "http_status_counts": {
+        "200": 5
+      },
+      "mean_latency_seconds": 0.35216762000054586,
+      "p95_latency_seconds": 0.43165220000082627,
+      "runtime_seconds_including_pacing": 16.81648680001672,
+      "runtime_incomplete": false,
+      "attempts_per_minute": 17.839635803103757,
+      "unknown_reasons": {},
+      "stopping_reason": "stage_completed",
+      "rate_limit_headers": [],
+      "sessions": [
+        {
+          "id": 1,
+          "stage": 1,
+          "started_at": "2026-11-07T14:00:03.258500+00:00",
+          "ended_at": "2026-11-07T14:00:08.931375+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 5.67288740001095,
+          "reason": "unrecognized_or_contradictory_pair"
+        },
+        {
+          "id": 2,
+          "stage": 1,
+          "started_at": "2026-11-07T15:31:47.587571+00:00",
+          "ended_at": "2026-11-07T15:31:58.731155+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 11.143599400005769,
+          "reason": "stage_completed"
+        }
+      ]
+    },
+    "2": {
+      "planned": 15,
+      "attempted_unique": 15,
+      "completed_responses": 15,
+      "classification_counts": {
+        "Available": 1,
+        "Taken": 1,
+        "Reserved": 7,
+        "Invalid": 6,
+        "Unknown": 0
+      },
+      "http_status_counts": {
+        "200": 15
+      },
+      "mean_latency_seconds": 2.768422826663785,
+      "p95_latency_seconds": 18.54440449998947,
+      "runtime_seconds_including_pacing": 91.71205890001147,
+      "runtime_incomplete": false,
+      "attempts_per_minute": 9.813322378698528,
+      "unknown_reasons": {},
+      "stopping_reason": "stage_completed",
+      "rate_limit_headers": [],
+      "sessions": [
+        {
+          "id": 3,
+          "stage": 2,
+          "started_at": "2026-11-07T15:36:46.137336+00:00",
+          "ended_at": "2026-11-07T15:36:57.354161+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 11.216841800007387,
+          "reason": "unrecognized_or_contradictory_pair"
+        },
+        {
+          "id": 4,
+          "stage": 2,
+          "started_at": "2026-11-07T15:52:16.842512+00:00",
+          "ended_at": "2026-11-07T15:52:38.530494+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 21.68799210000725,
+          "reason": "unrecognized_or_contradictory_pair"
+        },
+        {
+          "id": 5,
+          "stage": 2,
+          "started_at": "2026-11-07T16:02:12.397227+00:00",
+          "ended_at": "2026-11-07T16:02:12.853311+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 0.4560921999946004,
+          "reason": "unrecognized_or_contradictory_pair"
+        },
+        {
+          "id": 6,
+          "stage": 2,
+          "started_at": "2026-11-07T17:14:47.008596+00:00",
+          "ended_at": "2026-11-07T17:14:47.701456+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 0.6928742000018246,
+          "reason": "unsupported_or_contradictory_invalid_username_evidence"
+        },
+        {
+          "id": 7,
+          "stage": 2,
+          "started_at": "2026-11-07T17:34:02.088834+00:00",
+          "ended_at": "2026-11-07T17:34:59.747081+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 57.65825860000041,
+          "reason": "stage_completed"
+        }
+      ]
+    },
+    "3": {
+      "planned": 80,
+      "attempted_unique": 80,
+      "completed_responses": 80,
+      "classification_counts": {
+        "Available": 71,
+        "Taken": 9,
+        "Reserved": 0,
+        "Invalid": 0,
+        "Unknown": 0
+      },
+      "http_status_counts": {
+        "200": 80
+      },
+      "mean_latency_seconds": 0.4207989262500632,
+      "p95_latency_seconds": 0.5730815999995684,
+      "runtime_seconds_including_pacing": 429.54303329999675,
+      "runtime_incomplete": false,
+      "attempts_per_minute": 11.174666163535788,
+      "unknown_reasons": {},
+      "stopping_reason": "stage_completed",
+      "rate_limit_headers": [],
+      "sessions": [
+        {
+          "id": 8,
+          "stage": 3,
+          "started_at": "2026-11-07T17:44:50.688319+00:00",
+          "ended_at": "2026-11-07T17:52:00.231338+00:00",
+          "delay": 5.0,
+          "timeout": 15.0,
+          "elapsed": 429.54303329999675,
+          "reason": "stage_completed"
+        }
+      ]
+    }
+  }
+}

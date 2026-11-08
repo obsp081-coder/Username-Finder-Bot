@@ -1,0 +1,86 @@
+
+# ==========================================
+# Username Finder Bot - Git Ignore
+# ==========================================
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test and development caches
+.pytest_cache/
+.hypothesis/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Runtime data and user history
+runtime/
+
+# SQLite databases and related files
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Generated usernames and exported results
+*.csv
+*.tsv
+*.txt
+*.jsonl
+*.ndjson
+*.generation.json
+
+# Keep Python dependency files
+!requirements.txt
+!requirements-*.txt
+!requirements_*.txt
+
+# Secrets and credentials
+.env
+.env.*
+!.env.example
+*.session
+*.session-journal
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.bak
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Editor settings
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-11-05T16:21:48.789185+00:00",
+  "method": "POST",
+  "url": "https://accounts.snapchat.com/accounts/get_username_suggestions",
+  "username": "teamsnapchat",
+  "credentials_sent": false,
+  "cookies_sent": false,
+  "csrf_token_sent": false,
+  "attempts": 1,
+  "official_app_compared": false,
+  "result": "Unknown",
+  "http_status": 404,
+  "content_type": "text/html;charset=utf-8",
+  "response_bytes_sampled": 746,
+  "body_sample_sha256": "2c3db771909c32b2ac68c09b1504fdb28c143ca0e3f38438dacfb96940116ce6",
+  "restriction_markers": [],
+  "html_title": "404 &bull; Snapchat",
+  "stopped": true,
+  "interpretation": "Access/transport observation only; no validated claimability semantics. No retries or alternate route probes.",
+  "access_probe_elapsed_ms": 749.94
+}

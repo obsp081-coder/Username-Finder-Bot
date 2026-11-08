@@ -1,0 +1,18 @@
+[
+  {
+    "name": "avatar",
+    "reference": "https://create.roblox.com/docs/characters"
+  },
+  {
+    "name": "quest",
+    "reference": "https://dev.epicgames.com/documentation/en-us/fortnite/using-quest-design-devices-in-fortnite-creative"
+  },
+  {
+    "name": "respawn",
+    "reference": "https://dev.epicgames.com/documentation/en-us/fortnite/player-respawning-in-fortnite-creative"
+  },
+  {
+    "name": "spawn",
+    "reference": "https://dev.epicgames.com/documentation/en-us/fortnite/using-player-spawn-pad-devices-in-fortnite-creative"
+  }
+]

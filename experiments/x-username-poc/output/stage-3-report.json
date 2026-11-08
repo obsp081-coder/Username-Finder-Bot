@@ -1,0 +1,35 @@
+{
+  "planned": 80,
+  "attempted_unique": 80,
+  "completed_responses": 80,
+  "classification_counts": {
+    "Available": 71,
+    "Taken": 9,
+    "Reserved": 0,
+    "Invalid": 0,
+    "Unknown": 0
+  },
+  "http_status_counts": {
+    "200": 80
+  },
+  "mean_latency_seconds": 0.4207989262500632,
+  "p95_latency_seconds": 0.5730815999995684,
+  "runtime_seconds_including_pacing": 429.54303329999675,
+  "runtime_incomplete": false,
+  "attempts_per_minute": 11.174666163535788,
+  "unknown_reasons": {},
+  "stopping_reason": "stage_completed",
+  "rate_limit_headers": [],
+  "sessions": [
+    {
+      "id": 8,
+      "stage": 3,
+      "started_at": "2026-11-07T17:44:50.688319+00:00",
+      "ended_at": "2026-11-07T17:52:00.231338+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 429.54303329999675,
+      "reason": "stage_completed"
+    }
+  ]
+}

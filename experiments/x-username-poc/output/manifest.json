@@ -1,0 +1,707 @@
+{
+  "endpoint_hypothesis": "https://api.x.com/i/users/username_available.json",
+  "method_hypothesis": "GET",
+  "syntax_scope": "change-handle: 5-15 ASCII letters, digits, underscore",
+  "candidates": [
+    {
+      "username": "OpenAI",
+      "category": "existing_account_candidate",
+      "hypothesis": "May be taken; not independently verified here",
+      "position": 1,
+      "stage": 1
+    },
+    {
+      "username": "github",
+      "category": "existing_account_candidate",
+      "hypothesis": "May be taken; not independently verified here",
+      "position": 2,
+      "stage": 1
+    },
+    {
+      "username": "r23an",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 3,
+      "stage": 1
+    },
+    {
+      "username": "d0kkkwco5b43lfh",
+      "category": "valid_long",
+      "hypothesis": "15-character change-handle boundary; availability unknown",
+      "position": 4,
+      "stage": 1
+    },
+    {
+      "username": "Support",
+      "category": "existing_account_candidate",
+      "hypothesis": "May be taken; not independently verified here",
+      "position": 5,
+      "stage": 1
+    },
+    {
+      "username": "Microsoft",
+      "category": "existing_account_candidate",
+      "hypothesis": "May be taken; not independently verified here",
+      "position": 6,
+      "stage": 2
+    },
+    {
+      "username": "Google",
+      "category": "existing_account_candidate",
+      "hypothesis": "May be taken; not independently verified here",
+      "position": 7,
+      "stage": 2
+    },
+    {
+      "username": "admin",
+      "category": "restricted_looking",
+      "hypothesis": "Policy/reservation hypothesis; ownership and reservation unproven",
+      "position": 8,
+      "stage": 2
+    },
+    {
+      "username": "administrator",
+      "category": "restricted_looking",
+      "hypothesis": "Policy/reservation hypothesis; ownership and reservation unproven",
+      "position": 9,
+      "stage": 2
+    },
+    {
+      "username": "twitter",
+      "category": "restricted_looking",
+      "hypothesis": "Policy/reservation hypothesis; ownership and reservation unproven",
+      "position": 10,
+      "stage": 2
+    },
+    {
+      "username": "xadmin",
+      "category": "restricted_looking",
+      "hypothesis": "Policy/reservation hypothesis; ownership and reservation unproven",
+      "position": 11,
+      "stage": 2
+    },
+    {
+      "username": "officialadmin",
+      "category": "restricted_looking",
+      "hypothesis": "Policy/reservation hypothesis; ownership and reservation unproven",
+      "position": 12,
+      "stage": 2
+    },
+    {
+      "username": "bad-name",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 13,
+      "stage": 2
+    },
+    {
+      "username": "abcd",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 14,
+      "stage": 2
+    },
+    {
+      "username": "aaaaaaaaaaaaaaaa",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 15,
+      "stage": 2
+    },
+    {
+      "username": "bad.name",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 16,
+      "stage": 2
+    },
+    {
+      "username": "bad name",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 17,
+      "stage": 2
+    },
+    {
+      "username": "@abcde",
+      "category": "invalid_format",
+      "hypothesis": "Outside the scoped 5-15 change-handle syntax",
+      "position": 18,
+      "stage": 2
+    },
+    {
+      "username": "vwr81",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 19,
+      "stage": 2
+    },
+    {
+      "username": "w6k2w",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 20,
+      "stage": 2
+    },
+    {
+      "username": "iiaf1",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 21,
+      "stage": 3
+    },
+    {
+      "username": "z143bvh1rvem27d",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 22,
+      "stage": 3
+    },
+    {
+      "username": "frp9iwtf",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 23,
+      "stage": 3
+    },
+    {
+      "username": "j1jr046cmect",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 24,
+      "stage": 3
+    },
+    {
+      "username": "g5n9t",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 25,
+      "stage": 3
+    },
+    {
+      "username": "wnm0apn6nx5hma7",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 26,
+      "stage": 3
+    },
+    {
+      "username": "rza6gww2",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 27,
+      "stage": 3
+    },
+    {
+      "username": "sp3zrzukud0e",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 28,
+      "stage": 3
+    },
+    {
+      "username": "zmhvt",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 29,
+      "stage": 3
+    },
+    {
+      "username": "sddll3a3qniugd1",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 30,
+      "stage": 3
+    },
+    {
+      "username": "jejrpbob",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 31,
+      "stage": 3
+    },
+    {
+      "username": "k65fkuhhwqpg",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 32,
+      "stage": 3
+    },
+    {
+      "username": "l7png",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 33,
+      "stage": 3
+    },
+    {
+      "username": "pm75vodtcosut8b",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 34,
+      "stage": 3
+    },
+    {
+      "username": "oh3xp0by",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 35,
+      "stage": 3
+    },
+    {
+      "username": "xhs4gqiw92je",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 36,
+      "stage": 3
+    },
+    {
+      "username": "we4wi",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 37,
+      "stage": 3
+    },
+    {
+      "username": "cbhjskcxei6k1q9",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 38,
+      "stage": 3
+    },
+    {
+      "username": "asowjal9",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 39,
+      "stage": 3
+    },
+    {
+      "username": "igaw797xf4su",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 40,
+      "stage": 3
+    },
+    {
+      "username": "xrz1i",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 41,
+      "stage": 3
+    },
+    {
+      "username": "owvkqcknt1eg7q8",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 42,
+      "stage": 3
+    },
+    {
+      "username": "x775ithu",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 43,
+      "stage": 3
+    },
+    {
+      "username": "ml3mn9jdx83g",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 44,
+      "stage": 3
+    },
+    {
+      "username": "gtjck",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 45,
+      "stage": 3
+    },
+    {
+      "username": "bzc5nei23khj3rx",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 46,
+      "stage": 3
+    },
+    {
+      "username": "iceahrv0",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 47,
+      "stage": 3
+    },
+    {
+      "username": "ldfivssyxbyr",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 48,
+      "stage": 3
+    },
+    {
+      "username": "p4g2y",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 49,
+      "stage": 3
+    },
+    {
+      "username": "wskl1hr3s9gpg0g",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 50,
+      "stage": 3
+    },
+    {
+      "username": "sof6mz2x",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 51,
+      "stage": 3
+    },
+    {
+      "username": "jw6tk4usyc61",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 52,
+      "stage": 3
+    },
+    {
+      "username": "wsyc1",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 53,
+      "stage": 3
+    },
+    {
+      "username": "btkyr223r7tm8mx",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 54,
+      "stage": 3
+    },
+    {
+      "username": "bcka7tb7",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 55,
+      "stage": 3
+    },
+    {
+      "username": "zk214cimb2hm",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 56,
+      "stage": 3
+    },
+    {
+      "username": "jx6om",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 57,
+      "stage": 3
+    },
+    {
+      "username": "wkdu3h32eiirx3e",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 58,
+      "stage": 3
+    },
+    {
+      "username": "ul0wkr24",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 59,
+      "stage": 3
+    },
+    {
+      "username": "k6i9ss2cr2fw",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 60,
+      "stage": 3
+    },
+    {
+      "username": "jlnnq",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 61,
+      "stage": 3
+    },
+    {
+      "username": "bql47ijx8ex3z4i",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 62,
+      "stage": 3
+    },
+    {
+      "username": "bf82eied",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 63,
+      "stage": 3
+    },
+    {
+      "username": "qlxvwb2uw11n",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 64,
+      "stage": 3
+    },
+    {
+      "username": "hzwu9",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 65,
+      "stage": 3
+    },
+    {
+      "username": "i0e8mv4dpfdg2bd",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 66,
+      "stage": 3
+    },
+    {
+      "username": "hvnauekd",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 67,
+      "stage": 3
+    },
+    {
+      "username": "xqjtafwsc5wa",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 68,
+      "stage": 3
+    },
+    {
+      "username": "yiwxl",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 69,
+      "stage": 3
+    },
+    {
+      "username": "g5vte7zhb99b03h",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 70,
+      "stage": 3
+    },
+    {
+      "username": "ydh0nolf",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 71,
+      "stage": 3
+    },
+    {
+      "username": "kdpuf40adbdw",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 72,
+      "stage": 3
+    },
+    {
+      "username": "sd7es",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 73,
+      "stage": 3
+    },
+    {
+      "username": "f0ulrfydpyjrv5o",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 74,
+      "stage": 3
+    },
+    {
+      "username": "p2305n4i",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 75,
+      "stage": 3
+    },
+    {
+      "username": "vh46u92cf31c",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 76,
+      "stage": 3
+    },
+    {
+      "username": "y9peu",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 77,
+      "stage": 3
+    },
+    {
+      "username": "l5kpo67ucbglepc",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 78,
+      "stage": 3
+    },
+    {
+      "username": "sch12uwi",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 79,
+      "stage": 3
+    },
+    {
+      "username": "fxso876aynci",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 80,
+      "stage": 3
+    },
+    {
+      "username": "mm9u1",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 81,
+      "stage": 3
+    },
+    {
+      "username": "plvrx7292tbnvmk",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 82,
+      "stage": 3
+    },
+    {
+      "username": "jgf3sw2c",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 83,
+      "stage": 3
+    },
+    {
+      "username": "rfbw3gufr49j",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 84,
+      "stage": 3
+    },
+    {
+      "username": "wiyz1",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 85,
+      "stage": 3
+    },
+    {
+      "username": "m2lu8mjatwxeokj",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 86,
+      "stage": 3
+    },
+    {
+      "username": "moxf0ndc",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 87,
+      "stage": 3
+    },
+    {
+      "username": "g1nlfiwn1yyj",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 88,
+      "stage": 3
+    },
+    {
+      "username": "ro0cc",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 89,
+      "stage": 3
+    },
+    {
+      "username": "ldam7pmg137plhj",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 90,
+      "stage": 3
+    },
+    {
+      "username": "l49131eb",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 91,
+      "stage": 3
+    },
+    {
+      "username": "o2an1rdnvx1q",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 92,
+      "stage": 3
+    },
+    {
+      "username": "yzcnz",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 93,
+      "stage": 3
+    },
+    {
+      "username": "zlwys7rtny26486",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 94,
+      "stage": 3
+    },
+    {
+      "username": "bh8m0uyn",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 95,
+      "stage": 3
+    },
+    {
+      "username": "bywt6kc704az",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 96,
+      "stage": 3
+    },
+    {
+      "username": "o5xr3",
+      "category": "valid_short",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 97,
+      "stage": 3
+    },
+    {
+      "username": "ovopj60ycq6f7zs",
+      "category": "valid_long",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 98,
+      "stage": 3
+    },
+    {
+      "username": "qbmy4bvq",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 99,
+      "stage": 3
+    },
+    {
+      "username": "kjgl2esjq0pr",
+      "category": "random_valid",
+      "hypothesis": "Format candidate only; availability unknown",
+      "position": 100,
+      "stage": 3
+    }
+  ]
+}

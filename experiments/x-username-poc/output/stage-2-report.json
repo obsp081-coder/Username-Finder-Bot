@@ -1,0 +1,75 @@
+{
+  "planned": 15,
+  "attempted_unique": 15,
+  "completed_responses": 15,
+  "classification_counts": {
+    "Available": 1,
+    "Taken": 1,
+    "Reserved": 7,
+    "Invalid": 6,
+    "Unknown": 0
+  },
+  "http_status_counts": {
+    "200": 15
+  },
+  "mean_latency_seconds": 2.768422826663785,
+  "p95_latency_seconds": 18.54440449998947,
+  "runtime_seconds_including_pacing": 91.71205890001147,
+  "runtime_incomplete": false,
+  "attempts_per_minute": 9.813322378698528,
+  "unknown_reasons": {},
+  "stopping_reason": "stage_completed",
+  "rate_limit_headers": [],
+  "sessions": [
+    {
+      "id": 3,
+      "stage": 2,
+      "started_at": "2026-11-07T15:36:46.137336+00:00",
+      "ended_at": "2026-11-07T15:36:57.354161+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 11.216841800007387,
+      "reason": "unrecognized_or_contradictory_pair"
+    },
+    {
+      "id": 4,
+      "stage": 2,
+      "started_at": "2026-11-07T15:52:16.842512+00:00",
+      "ended_at": "2026-11-07T15:52:38.530494+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 21.68799210000725,
+      "reason": "unrecognized_or_contradictory_pair"
+    },
+    {
+      "id": 5,
+      "stage": 2,
+      "started_at": "2026-11-07T16:02:12.397227+00:00",
+      "ended_at": "2026-11-07T16:02:12.853311+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 0.4560921999946004,
+      "reason": "unrecognized_or_contradictory_pair"
+    },
+    {
+      "id": 6,
+      "stage": 2,
+      "started_at": "2026-11-07T17:14:47.008596+00:00",
+      "ended_at": "2026-11-07T17:14:47.701456+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 0.6928742000018246,
+      "reason": "unsupported_or_contradictory_invalid_username_evidence"
+    },
+    {
+      "id": 7,
+      "stage": 2,
+      "started_at": "2026-11-07T17:34:02.088834+00:00",
+      "ended_at": "2026-11-07T17:34:59.747081+00:00",
+      "delay": 5.0,
+      "timeout": 15.0,
+      "elapsed": 57.65825860000041,
+      "reason": "stage_completed"
+    }
+  ]
+}
