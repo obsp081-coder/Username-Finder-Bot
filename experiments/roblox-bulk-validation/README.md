@@ -1,0 +1,148 @@
+# Roblox bulk semantic validation — isolated, offline by default
+
+## الحالة والغرض
+
+أداة مستقلة لاختبار دلالة **الاسم الحالي** في bulk، وليست ميزة إنتاجية أو مقياس سرعة. القرار السابق [CONDITIONAL](../roblox-bulk-feasibility-2026-11-08.md) ما زال قائمًا. لا تعديل أو استيراد لـrunner/storage/UI، ولا فتح لقاعدة التطبيق، ولا نسخ لطابور المستخدم، ولا اعتماد جديد.
+
+**غير جاهزة حاليًا للتشغيل الحي:** المتاح 20 اسمًا رباعيًا مولدًا محليًا بلا اختيار حسب الإتاحة؛ ما زالت أدلة 10 أسماء حالية و5 سابقة ناقصة، ولم يُراجع manifest. لا توجد أدلة حالات الحسابات المقيدة؛ ستظل دلالاتها غير متحققة. لم تُرسل طلبات تحقق أسماء إلى Roblox أثناء التطوير؛ اقتصر البحث الخارجي على المصادر المنشورة.
+
+## التشغيل الآمن الآن
+
+أُعدت النسخة في شجرة منفصلة؛ نسخة التطبيق الأصلية لم تُسحب أو تُشغّل مجددًا. أوامر PowerShell من هذه الشجرة:
+
+```powershell
+Set-Location -LiteralPath 'C:\Users\USER\Documents\username-roblox-bulk-validation-20261108'
+$pythonExe = 'C:\Users\USER\Documents\username project\Username Finder Bot\.venv\Scripts\python.exe'
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py
+```
+
+الأمر العادي أو `status` **لا يرسل طلبات** ولا يبدأ تجربة. إذا لم يوجد manifest على نسخة جديدة فقط:
+
+```powershell
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py prepare
+```
+
+ينشئ `output/manifest.json` مرة واحدة، مع 20 اسمًا عشوائيًا و15 خانة موثقة فارغة مقصودة. يرفض الكتابة فوق ملف موجود. هذا المجلد متجاهل في Git؛ لا تضفه حتى بالقوة. لا توجد قائمة أسماء مولدة أو أدلة حية في الملفات المتتبعة.
+
+## إكمال العينة ومراجعتها دون شبكة
+
+### نتيجة البحث في المصادر العامة — 2026-11-08
+
+بناءً على توجيه المستخدم اللاحق، بُحثت المصادر الرسمية والعامة بدل انتظار قائمة منه. الجدول التالي **مراجع بحث غير معتمدة، وليس قائمة حسابات مثبتة أو manifest جاهزًا**. تاريخ مراجعة المصدر لكل صف هو **2026-11-08**؛ لا يعني ذلك التحقق من اسم الحساب في ذلك اليوم. لم تُستدعَ APIs أو خدمات lookup خارجية أو صفحات signup/profile للتحقق، ولم تُطلب معلومات خاصة أو تُفتح صور شكاوى الحسابات.
+
+تمت قراءة [مقال Roblox الرسمي لجوائز 2026](https://about.roblox.com/newsroom/2026/09/2026-roblox-innovation-awards) مباشرة. أما صفحات DevForum أدناه فأظهر فتحها تحقق متصفح/تعذر إتاحة؛ لم نتجاوزه أو نجرب مسارات JSON بديلة. مخرجات البحث المفهرسة أظهرت نصوص تصريحات أصحابها، لكنها ليست تحققًا مستقلاً حاليًا؛ أبقيناها خارج العينة المعتمدة.
+
+| الاسم المنشور المرشح لفئة current | المصدر وتاريخه | ما يثبته المنشور وحدود الربط |
+|---|---|---|
+| Onogork | [جوائز 2026](https://about.roblox.com/newsroom/2026/09/2026-roblox-innovation-awards)، 2026-09-12 | اسم Creator منشور رسميًا؛ لم يثبت هنا اسم حساب حالي ومعرّفه |
+| Valkenheim | [جوائز 2026](https://about.roblox.com/newsroom/2026/09/2026-roblox-innovation-awards)، 2026-09-12 | اسم Creator منشور رسميًا؛ رابط الملف لم يُستدعَ للتحقق |
+| Stickmasterluke | [جوائز 2026](https://about.roblox.com/newsroom/2026/09/2026-roblox-innovation-awards)، 2026-09-12 | ورد تحت Studio؛ لا نحوله تلقائيًا إلى دليل username |
+| LSPLASH | [جوائز 2026](https://about.roblox.com/newsroom/2026/09/2026-roblox-innovation-awards)، 2026-09-12 | اسم Studio، وقد لا يطابق اسم حساب فردي؛ غير معتمد |
+| 1Eidev | [تصريح صاحب الحساب](https://devforum.roblox.com/t/verified-checkmark-badge-fails-to-be-reinstated-under-new-username-despite-meeting-the-90-day-playtime-hour-criteria/4566700)، 2026-04-09 | يدعي أنه الاسم الحالي بعد EidenBlox؛ المصدر المفهرس ليس تحققًا حاليًا للحساب |
+| Taxed_Person | [تصريح تغيير الاسم](https://devforum.roblox.com/t/verified-badge-unobtainable-after-false-appealed-username-moderation/4972587)، 2026-11-03 | يدعي اسمًا حاليًا بدل Xannedo؛ لا نساوي اسم مؤلف المنتدى باسم حسابه الحالي |
+| gamingjeremyyy | [تصريح تغيير الاسم](https://devforum.roblox.com/t/small-rant-ghosted-by-support-for-over-a-month-and-moderation-is-absolutely-cooked/4873330)، 2026-09-15 | يدعي الانتقال من gamingjeremyYT؛ حالة الحساب الحالية غير مثبتة |
+| GeneratedBeh | [تصريح تغيير الاسم](https://devforum.roblox.com/t/my-account-got-warned-for-claiming-by-directing-users-off-platform-on-my-username-banned/4776429/16)، 2026-08-18 | يدعي الانتقال من BehYT3؛ اسم المنتدى/Display Name ليس إثباتًا كافيًا |
+| muichiruu | [تصريح صاحب المحفظة](https://devforum.roblox.com/t/muichiruu-illustrator/419990?page=2)، 2020-03-20 | يدعي الانتقال من KawaiiX_Jimin؛ قديم جدًا لإثبات اسم حالي الآن |
+| Accursed_Dev | [تصريح المالك](https://devforum.roblox.com/t/verified-badge-removed-after-community-rename-and-not-restored-group-id-7916244/4908227)، 2026-10-01 | يذكر نفسه مالكًا؛ تغيير اسم المجموعة المذكور ليس تغيير username شخصي |
+
+| الاسم السابق المزعوم | الاسم اللاحق كما ورد في المصدر | المصدر وتاريخ التصريح | قرار القبول |
+|---|---|---|---|
+| EidenBlox | 1Eidev | [4566700](https://devforum.roblox.com/t/verified-checkmark-badge-fails-to-be-reinstated-under-new-username-despite-meeting-the-90-day-playtime-hour-criteria/4566700)، 2026-04-09 | غير معتمد؛ تصريح مفهرس دون تحقق مستقل حالي |
+| KawaiiX_Jimin | muichiruu | [419990](https://devforum.roblox.com/t/muichiruu-illustrator/419990?page=2)، 2020-03-20 | غير معتمد؛ تاريخ قديم وربط الحساب الحالي غير متحقق |
+| Xannedo | Taxed_Person | [4972587](https://devforum.roblox.com/t/verified-badge-unobtainable-after-false-appealed-username-moderation/4972587)، 2026-11-03 | غير معتمد؛ لا نصنف الحظر أو الاسم الحالي من شكوى مفهرسة وحدها |
+| gamingjeremyYT | gamingjeremyyy | [4873330](https://devforum.roblox.com/t/small-rant-ghosted-by-support-for-over-a-month-and-moderation-is-absolutely-cooked/4873330)، 2026-09-15 | غير معتمد؛ حالة الحساب واستمرار الاسم غير مثبتين |
+| BehYT3 | GeneratedBeh | [4776429/16](https://devforum.roblox.com/t/my-account-got-warned-for-claiming-by-directing-users-off-platform-on-my-username-banned/4776429/16)، 2026-08-18 | غير معتمد؛ تغير ظاهر في الهوية لا يكفي لربط حساب حالي |
+
+استُبعد أيضًا Telamon/Shedletsky من أمثلة التحويل المؤكدة: [موقع صاحبه](https://shedletsky.com/who-is-shedletsky-anyways) يثبت استعمال اللقبين، ولا يثبت وحده تاريخ تبديل اسم الحساب أو ارتباطًا حاليًا فريدًا. لم نخترع تواريخ تغييرات أو حالات حظر، ولم نستبدل الخانات الناقصة بهذه الادعاءات.
+
+**حصيلة البحث:** لا تزال الأسماء الحالية العشرة والأسماء السابقة الخمسة غير مكتملة كعينة موثقة مستقلة بالمعيار المطلوب؛ هذه عقبة دلالية/وصول، لا عطل في الأداة. بقيت الخانات غير المعتمدة فارغة و`independently_established=false`؛ لم تُراجع بصمة manifest ولم يتغير أي من الأسماء العشوائية العشرين بناء على البحث. يلزم مصدر منشور قابل للمراجعة يربط الاسم بالحساب الحالي بوضوح قبل اعتماد أي مثال؛ لا تشغيل حي الآن، ولا توسيع تلقائي لميزانية 42.
+
+### تعبئة manifest بعد اكتمال الدليل
+
+يعدل المستخدم `experiments/roblox-bulk-validation/output/manifest.json` محليًا. لا تستخدم أدوات البحث/التحقق لتعبئة أسماء حسب تصنيفها. المطلوب:
+
+| category | العدد | متطلبات الدليل |
+|---|---:|---|
+| `current` | 10 | اسم حالي عام موثق؛ أربعة طلبات فقط تختلف كتابتها بحالة الأحرف عن الاسم الموثق، مع عدم تكرار أي اسم casefold |
+| `former` | 5 | اسم سابق موثق، والاسم الحالي المختلف للحساب نفسه |
+| `restricted` | 0–5 | حالة عامة موثقة فقط؛ لا استنتاج من غياب profile |
+| `random` | 20 | أسماء رباعية صحيحة مولدة محليًا، لا ينتقى منها المتاح أو المأخوذ مسبقًا |
+
+كل سجل يحوي `requested_username`, `category`, `evidence_reference`, `expected_current_username`, `expected_user_id`, `independently_established`, `hypothesis`, `limitations`.
+
+- الرابط دليل HTTPS عام بلا credentials/query/fragment؛ لا تجمع معلومات خاصة. اذكر العلاقة والحدود بوضوح. الروابط لا تُفتح آليًا؛ `independently_established=true` **تصريح المراجع بعد تحقق فعلي**، وليس نتيجة اختبار برمجي.
+- `expected_user_id` اختياري، وإذا عُرف يجب أن يكون عددًا صحيحًا موجبًا. النوع bool غير مقبول. لعينات current/former يجب ملء الاسم الحالي الموثق. للحالات المقيدة تضاف `account_state` بإحدى قيم `banned/disabled/retired/restricted`، مع دليلها، دون اختلاق تاريخ.
+- إذا لم تتوفر الحالات المقيدة الخمس، يبقى `restricted_case_gap` وصفًا صريحًا للنقص. يجوز إكمال 35–40 سجلًا مع هذا القيد المعترف به؛ **لا يجوز تجاوز نقص فئتي current/former أو نقص المراجعة**.
+- يجب أن تكون جميع الأسماء فريدة بعد ASCII casefold، وألا تغير العينة العشوائية بناء على نتائج سابقة. لا تضف أي credentials أو cookies أو بيانات خاصة إلى manifest أو الملاحظات.
+
+بعد الإكمال:
+
+```powershell
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py status
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py review
+```
+
+تُعرض القائمة وبصمتها والنقطتان والميزانية وشروط الوقف، ثم يلزم كتابة `REVIEW <fingerprint>` حرفيًا. تحفظ المراجعة مرة واحدة تحت `output/reviews/` مرتبطة ببصمة manifest وبروتوكول الفردي. تغييرهما يبطل تلك المراجعة؛ مراجعة نسخة جديدة تُحفظ منفصلة ولا تمحو القديمة. إعادة مراجعة النسخة نفسها لا تكتب فوق سجلها.
+
+## التنفيذ الحي لاحقًا — للمستخدم فقط وبعد استيفاء الشروط
+
+**لم يُنفذ هذا الأمر داخل Codex، ولا يعمل مع العينة الحالية الناقصة.** بعد اكتمال العينة والمراجعة، من طرفية المستخدم التفاعلية:
+
+```powershell
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py live
+```
+
+تعرض الأداة القائمة والنقطتين والميزانية مجددًا؛ يلزم كتابة `RUN <fingerprint>` حرفيًا. لا يوجد خيار تخطي للإقرار، ولا قراءة credentials أو cookies أو proxies من البيئة. لا إرسال عند الاستيراد أو التشغيل الافتراضي أو prepare/review/report.
+
+يتأكد المستخدم يدويًا قبل live من توقف أي فاحص Roblox آخر ومن عدم وجود قيد مزود سابق لم يُراجع. لا تفتح الأداة قاعدة التطبيق لفحص ذلك، ولا توقف أو تستأنف أعماله بنفسها. تسلسل الأداة وحده لا يضمن غياب طلبات برامج أخرى.
+
+- دفعتان مرتبتان بحد أقصى 20 اسمًا لكل واحدة، ثم طلب فردي لكل اسم، **حتى أسماء bulk Taken**. أقصى الميزانية 42 محاولة، شاملة الإخفاق؛ عينة 35 اسمًا تتطلب 37 محاولة، وعينة 40 تتطلب 42.
+- bulk: `POST https://users.roblox.com/v1/usernames/users` مع `usernames` و`excludeBannedUsers=false`.
+- الفردي: `protocol.request_url` و`protocol.classify` الأصليان، دون تعديل: `GET https://auth.roblox.com/v1/usernames/validate` مع `Username`, `Birthday=2000-01-01T00:00:00Z`, `Context=0`. يضيف غلاف التجربة فقط وقفًا عند schema غير متوقع؛ لا يغير مصنف الإنتاج.
+- طلب HTTPS واحد في كل لحظة، مع تحقق الشهادة والاسم، دون redirects/auth/cookies/proxies/retries. مهلة I/O مقدارها 10 ثوانٍ، مع تقليص مهلة القراءة بحسب الزمن المتبقي وفحص deadline بين القراءات. لا ضمان مقاطعة لحظية لكل سلوك socket/OS؛ Ctrl+C يوقف الطلب ويحفظ الجزء المستلم عندما يعود التحكم إلى Python.
+- **10 ثوانٍ على الأقل من انتهاء الرد إلى الطلب التالي**؛ زمن التحليل والحفظ محسوب ضمنها، ولا انتظار إضافي بعد آخر طلب. الانتظار قابل للإلغاء، والاستيقاظ المبكر لا يقصره.
+- أول HTTP غير 200 أو challenge أو Retry-After أو quota صفر أو خطأ شبكة/مهلة/جسم ناقص/JSON غير مدعوم/Unknown/تعارض يوقف التجربة كلها؛ **لا محاولة فردية لتجاوز تقييد bulk**. يحفظ Retry-After ولا يعتبر مرور وقته دليل زوال المنع. لا استئناف أو إعادة تلقائية؛ لا يبدأ مقياس أداء آخر.
+
+## سياسة الدليل والمقارنة
+
+المحلل يشترط `data[]`، وسجلًا وحيدًا له `requestedUsername` و`name` يطابقان الاسم المطلوب بعد تطبيع ASCII، و`id` صحيح موجب وليس bool. عندها فقط ينتج **مرشح Taken أولي**، لا تحقق مستقل. لا API code مصطنع لنتيجة bulk.
+
+الاسم السابق المرتبط باسم حالي مختلف يبقى Unresolved. Display Name لا يثبت الملكية. الغياب أو الرد الجزئي السليم يبقي الأسماء غير المطابقة Unresolved؛ لا Available من الغياب. تكرار المخرجات، أو تعارض الحسابات، أو سجل غير مطلوب، أو حقول حرجة خاطئة/جديدة، أو JSON بمفاتيح مكررة يوقف الاستنتاج؛ لا قبول جزئي لنتائج إيجابية من رد كلي غير موثوق.
+
+يحفظ دليل bulk ودليل الفردي وتصريحات manifest والمقارنة اليدوية منفصلة. عدم موافقة الفردي على bulk Taken، أو مخالفة الربط الموثق في manifest، يوقف للمراجعة. يحتفظ كل مصدر برده وتصنيفه الأولي، وتكون **خلاصة المقارنة Unknown عند التعارض**، دون محو ملاحظة أي مصدر أو فرض اتفاق.
+
+## حفظ الأدلة والانقطاع والتقارير
+
+كل تشغيل له experiment id عشوائي، ومجلد `output/runs/<manifest-sha256>/`؛ يحوي snapshot للقائمة والمراجعة، و`events.jsonl` متزايدًا فقط:
+
+- intent مع الطريقة والرابط والمعاملات والأسماء والتوقيت والفاصل المقاس، مع fsync **قبل** استدعاء النقل؛ ثم الرد والتوقيت والرؤوس والدليل الخام مع fsync **قبل** التفسير؛ ثم الاستنتاج والوقف.
+- الجسم محفوظ base64 وبصمة SHA256، بحد 1 MiB، مع معاينة نصية محدودة. الأجسام المبتورة/الكبيرة أخطاء. الرؤوس بقائمة مسموحة فقط؛ لا Set-Cookie أو معرفات challenge. إذا ظهر حقل token/session/cookie صريح غير متوقع، يُحذف الجسم من السجل مع حفظ بصمته وسبب الحذف ويُوقف التشغيل.
+- يشمل سجل البداية بصمتي شيفرة التجربة وبروتوكول الفردي. لا تخزين خارجي أو application database أو تعديل لصفوف الإنتاج.
+- إعادة live للقائمة نفسها **مرفوضة عند وجود مجلد التشغيل**، حتى لو لم توجد نتيجة أو حدث انهيار. لا خيار resume أو force؛ لا تحذف أدلة التشغيل لإعادة طلبات مجهولة المصير. intent بلا نتيجة يعني تسليمًا غير محسوم، وليس HTTP مؤكدًا أو إذن إعادة.
+
+بعد انتهاء/انقطاع تجربة المستخدم، لإعادة بناء التقارير دون شبكة:
+
+```powershell
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py report
+# If the editable manifest changed, use the archived run fingerprint:
+& $pythonExe experiments/roblox-bulk-validation/bulk_validation.py report --run-id '<64-character-run-fingerprint>'
+```
+
+ينشئ كل تقرير ملفات جديدة `report-<uuid>.json` و`comparison-<uuid>.csv`، دون تغيير journal أو snapshots. يعرض عدد intents والردود الكاملة وتسليمات عدم اليقين منفصلة، والقياسات والرؤوس والوقف والتعارضات ونسب التطابق/عدم الحسم. CSV يربط كل اسم بمحاولتي bulk/الفردي وحالتي HTTP والأزمنة والتصنيفات والمصدر الموثق. كل المرشحين موجودون، بمن فيهم غير المفحوصين. journal مقطوع يوقف القراءة عند موضعه ويعلن حاجة مراجعة السلامة؛ تبقى بايتاته الأصلية.
+
+إذا قُتل البرنامج بعد وصول رد وقبل حفظه، لا يمكن ضمان استرجاع ذلك الرد: يبقى intent غير المحسوم ولا يُعاد إرساله. fsync والاختبار بالانهيار يثبتان سلوك العملية المختبر؛ لا ادعاء بضمان كل أعطال القرص/الطاقة.
+
+## المقارنة اليدوية والخطوة التالية
+
+تُنشأ `manual_comparison.csv` مرة واحدة، ولا تكتب الأداة فوق ملاحظات المستخدم. الأولوية للتعارضات، وكل Available أولي، وحتى 10 حالات bulk Taken، والأسماء السابقة. يسجل المستخدم: الاسم، الوقت، سياق واجهة Roblox الرسمية، النص الحرفي، إمكان المتابعة، التصنيف الذي يدعمه الدليل وحدوده. **لا يقدم تسجيلًا أو تغيير اسم**. رسالة «غير متاح» وحدها لا تثبت حسابًا قائمًا؛ اترك Unknown إن لم يتحدد السبب.
+
+التقرير الآلي لا يدعي إنجاز تلك المقارنة أو دقة مستقلة، حتى لو اتفقت نقطتا API. لا تعميم لدقة عامة أو سرعة مستدامة أو أكثر من 2× من هذه العينة. إذا نجحت الدلالات دون false Taken أو aliases خاطئة أو تعارضات معلقة، تراجع الأدلة اليدوية أولًا، ثم تقرر مهمة أداء صغيرة معتمدة مستقلة بعينة ممثلة؛ لا دمج أو توسيع تلقائي.
+
+## التحقق المحلي
+
+الاختبارات تستخدم fixtures **افتراضية**، ونقل HTTP محاكى، وساعة انتظار حتمية، وملفات مؤقتة. لا حساب أو رد Roblox حقيقي في fixtures. تمنع الاختبارات الجديدة socket وSQLite، وتشمل subprocess يُنهى بعد intent لاختبار الانهيار. النتيجة الفعلية: **100 اختبار جديد ناجحًا و84 انحدارًا متعلقًا ناجحًا**، ونجاح Ruff وformat --check وcompileall للملفين. انظر [التسليم](../../PROGRESS.md) للتفاصيل؛ لا تستبدل نتائج الاختبارات المحلية بدليل حي.
+
+```powershell
+& $pythonExe -m pytest -q experiments/roblox-bulk-validation/tests/test_bulk_validation.py
+& $pythonExe -m pytest -q tests/test_roblox.py tests/test_x.py::test_classifications tests/test_x.py::test_hzwu9_is_not_hardcoded_or_claimed_verified
+```
