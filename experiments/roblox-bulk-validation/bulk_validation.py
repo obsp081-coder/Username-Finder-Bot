@@ -35,6 +35,8 @@ from username_finder import roblox_protocol as protocol  # noqa: E402
 BULK_URL = "https://users.roblox.com/v1/usernames/users"
 DATA = Path(__file__).resolve().parent / "output"
 MAX_REQUESTS = 42
+PILOT_MODE = "RANDOM_BULK_PILOT"
+PILOT_MAX_REQUESTS = 21
 BATCH_SIZE = 20
 PACE_SECONDS = 10.0
 TIMEOUT_SECONDS = 10.0
@@ -161,6 +163,112 @@ def prepare(path=DATA):
     return manifest
 
 
+def prepare_pilot(path=DATA):
+    """Freeze the existing random rows, preserving their exact order and spelling."""
+    path = data_directory(path)
+    destination = path / "random-pilot"
+    if destination.exists():
+        manifest = read_json(data_directory(destination) / "manifest.json")
+        errors = validate_pilot_manifest(manifest)
+        if errors:
+            raise ValueError("Existing pilot is invalid; preserved without replacement: " + "; ".join(errors))
+        return manifest
+    source = path / "manifest.json"
+    if source.exists():
+        original = read_json(source)
+        if not isinstance(original, dict) or not isinstance(original.get("candidates"), list):
+            raise ValueError("Existing source manifest is malformed; no replacement sample generated")
+        rows = [
+            dict(r) for r in original["candidates"] if isinstance(r, dict) and r.get("category") == "random"
+        ]
+        origin = "reused_existing_random_candidates"
+        source_hash = fingerprint(original)
+    else:
+        rows, seen = [], set()
+        while len(rows) < 20:
+            name = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(4))
+            if name in seen:
+                continue
+            seen.add(name)
+            rows.append(
+                {
+                    "requested_username": name,
+                    "category": "random",
+                    "evidence_reference": "",
+                    "expected_current_username": "",
+                    "expected_user_id": None,
+                    "independently_established": False,
+                    "hypothesis": "Unbiased local sample; original manifest unavailable",
+                    "limitations": "No independent ownership or claimability evidence",
+                }
+            )
+        origin, source_hash = "fresh_unbiased_sample_original_unavailable", None
+    manifest = {
+        "version": 1,
+        "mode": PILOT_MODE,
+        "candidates": rows,
+        "prepared_at_utc": utcnow(),
+        "sample_origin": {
+            "kind": origin,
+            "source_manifest_sha256": source_hash,
+            "ordered_usernames_sha256": digest(encoded([r.get("requested_username") for r in rows])),
+        },
+        "semantic_limitations": "Random only; current/former/restricted account semantics remain unverified",
+    }
+    errors = validate_pilot_manifest(manifest)
+    if errors:
+        raise ValueError("Pilot preparation blocked: " + "; ".join(errors))
+    destination.mkdir()  # One preparation wins; never replace a previously frozen sample.
+    write_new(destination / "manifest.json", manifest)
+    return manifest
+
+
+def validate_pilot_manifest(manifest):
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("mode") != PILOT_MODE
+        or type(manifest.get("version")) is not int
+        or manifest["version"] != 1
+    ):
+        return ["Expected a RANDOM_BULK_PILOT version 1 manifest"]
+    rows = manifest.get("candidates")
+    if not isinstance(rows, list) or len(rows) != 20:
+        return ["Pilot requires exactly 20 frozen random candidates"]
+    names = []
+    for row in rows:
+        if (
+            not isinstance(row, dict)
+            or not valid_name(row.get("requested_username"))
+            or len(row["requested_username"]) != 4
+            or row.get("category") != "random"
+            or row.get("independently_established") is not False
+            or row.get("expected_user_id") is not None
+            or row.get("expected_current_username") != ""
+            or any(
+                not isinstance(row.get(field), str)
+                for field in ("evidence_reference", "hypothesis", "limitations")
+            )
+        ):
+            return ["Pilot rows must be valid random four-character usernames without ownership assertions"]
+        names.append(row["requested_username"])
+    if len({key(n) for n in names}) != 20:
+        return ["Pilot contains case-insensitive duplicate usernames"]
+    origin = manifest.get("sample_origin")
+    if (
+        not isinstance(origin, dict)
+        or origin.get("kind")
+        not in ("reused_existing_random_candidates", "fresh_unbiased_sample_original_unavailable")
+        or origin.get("ordered_usernames_sha256") != digest(encoded(names))
+    ):
+        return ["Pilot sample origin/order fingerprint missing or changed"]
+    if origin["kind"] == "reused_existing_random_candidates":
+        if not re.fullmatch(r"[0-9a-f]{64}", str(origin.get("source_manifest_sha256", ""))):
+            return ["Source manifest fingerprint missing"]
+    elif origin.get("source_manifest_sha256") is not None:
+        return ["Fresh sample must not claim an existing source manifest"]
+    return []
+
+
 def validate_manifest(manifest):
     """No public evidence is fabricated or verified through a network request."""
     errors = []
@@ -234,12 +342,14 @@ def validate_manifest(manifest):
     return errors
 
 
-def manifest_status(manifest):
+def manifest_status(manifest, *, pilot=False):
     rows = manifest.get("candidates", []) if isinstance(manifest, dict) else []
     rows = rows if isinstance(rows, list) else []
     return {
         "fingerprint": fingerprint(manifest),
-        "errors": validate_manifest(manifest),
+        "mode": PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
+        "maximum_attempts": PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS,
+        "errors": validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest),
         "categories": dict(Counter(str(r.get("category")) for r in rows if isinstance(r, dict))),
         "restricted_case_gap": manifest.get("restricted_case_gap", "") if isinstance(manifest, dict) else "",
         "independent_evidence_note": "Reviewer declarations; no automatic source verification",
@@ -512,9 +622,9 @@ def review_path(path, manifest):
     return path / "reviews" / (fingerprint(manifest) + "-" + protocol_fingerprint()[:16] + ".json")
 
 
-def reviewed_manifest(path=DATA):
+def reviewed_manifest(path=DATA, *, pilot=False):
     manifest = read_json(path / "manifest.json")
-    errors = validate_manifest(manifest)
+    errors = validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest)
     if errors:
         raise ValueError("Manifest incomplete: " + "; ".join(errors))
     review = read_json(review_path(path, manifest))
@@ -528,26 +638,30 @@ def reviewed_manifest(path=DATA):
     return manifest, review
 
 
-def describe(manifest):
+def describe(manifest, *, pilot=False):
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
-    print(json.dumps(manifest_status(manifest), ensure_ascii=False, indent=2))
+    print(json.dumps(manifest_status(manifest, pilot=pilot), ensure_ascii=False, indent=2))
     print(f"Endpoints: POST {BULK_URL}; GET {protocol.ENDPOINT}")
-    print("Budget: at most 42 attempts; sequential; timeout 10s; post-response pacing >=10s.")
+    limit = PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    print(f"Budget: at most {limit} attempts; sequential; timeout 10s; post-response pacing >=10s.")
     print("Stop on any failure/restriction/ambiguity/conflict; no retries or automatic resume.")
     print("API results are preliminary; no registration, credentials, or production database access.")
     print("Run only with other Roblox checkers stopped and no unresolved provider restriction.")
 
 
-def review_manifest(path=DATA, *, acknowledge=input):
+def review_manifest(path=DATA, *, acknowledge=input, pilot=False):
     path = data_directory(path)
     manifest = read_json(path / "manifest.json")
-    describe(manifest)
-    errors = validate_manifest(manifest)
+    describe(manifest, pilot=pilot)
+    errors = validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest)
     if errors:
         raise ValueError("Review blocked: " + "; ".join(errors))
-    answer = acknowledge(
-        "Confirm public evidence and missing-category limitations. Type REVIEW <fingerprint>: "
+    prompt = (
+        "Review the frozen random sample and its semantic limitations. Type REVIEW <fingerprint>: "
+        if pilot
+        else "Confirm public evidence and missing-category limitations. Type REVIEW <fingerprint>: "
     )
+    answer = acknowledge(prompt)
     if answer != "REVIEW " + fingerprint(manifest):
         raise ValueError("Review not acknowledged")
     (path / "reviews").mkdir(exist_ok=True)
@@ -564,19 +678,29 @@ def review_manifest(path=DATA, *, acknowledge=input):
 
 
 def run_experiment(
-    path=DATA, *, transport=None, acknowledge=input, cancel=None, wait=None, monotonic=time.monotonic
+    path=DATA,
+    *,
+    transport=None,
+    acknowledge=input,
+    cancel=None,
+    wait=None,
+    monotonic=time.monotonic,
+    pilot=False,
 ):
     path = data_directory(path)
-    manifest, review = reviewed_manifest(path)
-    describe(manifest)
+    manifest, review = reviewed_manifest(path, pilot=pilot)
+    describe(manifest, pilot=pilot)
     answer = acknowledge("Manual live execution only. Type RUN <fingerprint>: ")
     if answer != "RUN " + fingerprint(manifest):
         raise ValueError("Live execution not acknowledged")
     plan = request_plan(manifest)
-    if len(plan) > MAX_REQUESTS:
+    limit = PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    if len(plan) > limit:
         raise ValueError("Request budget exceeded before dispatch")
+    run_started = monotonic()
     runs = path / "runs"
-    runs.mkdir(exist_ok=True)
+    # A pilot has one lifetime execution, even if someone edits reviewed metadata.
+    runs.mkdir(exist_ok=not pilot)
     run = runs / fingerprint(manifest)
     run.mkdir()  # Existing evidence, even a crashed intent, permanently blocks implicit replay.
     write_new(run / "manifest.json", manifest)
@@ -587,7 +711,8 @@ def run_experiment(
             "event": "begin",
             "experiment_id": str(uuid.uuid4()),
             "manifest_sha256": fingerprint(manifest),
-            "maximum_attempts": MAX_REQUESTS,
+            "mode": PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
+            "maximum_attempts": limit,
             "planned_attempts": len(plan),
             "pacing_seconds": PACE_SECONDS,
             "timeout_seconds": TIMEOUT_SECONDS,
@@ -606,7 +731,7 @@ def run_experiment(
             if cancel.is_set():
                 stop = "cancelled_before_request"
                 break
-            if attempts >= MAX_REQUESTS:
+            if attempts >= limit:
                 stop = "request_budget_exhausted"
                 break
             while previous_finished is not None:
@@ -728,7 +853,14 @@ def run_experiment(
     except Exception as exc:
         stop = "unexpected_execution_error_" + type(exc).__name__
     finally:
-        journal.append({"event": "stop", "reason": stop, "dispatch_intents": attempts})
+        journal.append(
+            {
+                "event": "stop",
+                "reason": stop,
+                "dispatch_intents": attempts,
+                "elapsed_seconds_including_pacing": monotonic() - run_started,
+            }
+        )
     return report_run(run)
 
 
@@ -738,10 +870,12 @@ def report_run(run):
     intents = {e["attempt"]: e for e in events if e.get("event") == "request_intent"}
     responses = {e["attempt"]: e for e in events if e.get("event") == "response"}
     mappings, individuals, contradictions = {}, {}, []
+    bulk_stop_reasons = {}
     conflicted_names = set()
     for e in events:
         if e.get("event") == "bulk_interpretation":
             mappings.update(e["mapping"])
+            bulk_stop_reasons.update(dict.fromkeys(e["mapping"], e.get("stop_reason", "")))
         if e.get("event") == "individual_interpretation":
             individuals[e["username_key"]] = e["result"]
         if "conflict" in e.get("stop_reason", ""):
@@ -775,6 +909,9 @@ def report_run(run):
                 "bulk_latency_seconds": observed["bulk"].get("latency_seconds"),
                 "bulk_preliminary_classification": bulk.get("preliminary_classification", "NotObserved"),
                 "bulk_reason": bulk.get("reason", ""),
+                "bulk_interpretation_stop_reason": bulk_stop_reasons.get(name, ""),
+                "bulk_record": json.dumps(bulk.get("record"), ensure_ascii=False),
+                "bulk_response_sha256": observed["bulk"].get("body_sha256"),
                 "bulk_api_code": "",
                 "individual_classification": individual.get("classification", "NotObserved"),
                 "individual_validator_attempt": linked["individual"],
@@ -782,6 +919,12 @@ def report_run(run):
                 "individual_latency_seconds": observed["individual"].get("latency_seconds"),
                 "individual_api_code": individual.get("api_code"),
                 "individual_reason": individual.get("reason", ""),
+                "individual_response_sha256": observed["individual"].get("body_sha256"),
+                "taken_api_agreement": (
+                    bulk.get("preliminary_classification") == "Taken"
+                    and individual.get("classification") == "Taken"
+                    and name not in conflicted_names
+                ),
                 "comparison_status": (
                     "Conflict"
                     if name in conflicted_names
@@ -804,10 +947,42 @@ def report_run(run):
         ]
         for kind in ("bulk", "individual")
     }
+    begin = next((e for e in events if e.get("event") == "begin"), {})
     summary = {
         "run_directory": str(run.resolve()),
         "manifest_sha256": fingerprint(manifest),
         "candidates": len(rows),
+        "mode": begin.get("mode", manifest.get("mode", "FULL_SEMANTIC_VALIDATION")),
+        "maximum_attempts": begin.get("maximum_attempts"),
+        "planned_attempts": begin.get("planned_attempts"),
+        "usernames": [r["username"] for r in rows],
+        "bulk_requested_usernames": [
+            n for e in intents.values() if e["request"]["kind"] == "bulk" for n in e["request"]["usernames"]
+        ],
+        "individual_attempted_usernames": [
+            n
+            for e in intents.values()
+            if e["request"]["kind"] == "individual"
+            for n in e["request"]["usernames"]
+        ],
+        "elapsed_seconds_including_pacing": (
+            stops[-1].get("elapsed_seconds_including_pacing") if stops else None
+        ),
+        "taken_api_agreements": sum(r["taken_api_agreement"] for r in rows),
+        "compared_without_conflict": sum(r["comparison_status"] == "ComparedNoConflict" for r in rows),
+        "potential_shortcut_usernames_api_only": [r["username"] for r in rows if r["taken_api_agreement"]],
+        "potential_shortcuts_not_independently_verified": True,
+        "historical_or_different_current_names": [
+            r["username"]
+            for r in rows
+            if r["bulk_reason"] == "historical_or_different_current_name"
+            and not r["bulk_interpretation_stop_reason"]
+        ],
+        "missing_bulk_records": [
+            r["username"]
+            for r in rows
+            if r["bulk_reason"] == "missing_bulk_record" and not r["bulk_interpretation_stop_reason"]
+        ],
         "dispatch_intents_including_failures": len(intents),
         "responses_recorded": len(responses),
         "http_status_observed": sum(r["response"]["status"] is not None for r in responses.values()),
@@ -925,27 +1100,34 @@ def main(argv=None):
         "action", nargs="?", choices=("status", "prepare", "review", "live", "report"), default="status"
     )
     parser.add_argument("--run-id", help="Report an archived run by its full manifest SHA256")
+    parser.add_argument("--pilot", action="store_true", help="Use the separate 20-name RANDOM_BULK_PILOT")
     args = parser.parse_args(argv)
     try:
+        data_path = DATA / "random-pilot" if args.pilot else DATA
         if args.run_id and (args.action != "report" or not re.fullmatch(r"[0-9a-f]{64}", args.run_id)):
             raise ValueError("--run-id requires report and a full lowercase SHA256")
         if args.action == "prepare":
-            value = manifest_status(prepare(DATA))
+            manifest = prepare_pilot(DATA) if args.pilot else prepare(DATA)
+            value = manifest_status(manifest, pilot=args.pilot)
         elif args.action == "review":
-            review_manifest(DATA)
+            review_manifest(data_path, pilot=args.pilot)
             value = {"review_saved": True, "live_requests": 0}
         elif args.action == "live":
             if not sys.stdin.isatty():
                 raise ValueError("Live mode requires a user-operated interactive terminal")
-            value = run_experiment(DATA)
+            value = run_experiment(data_path, pilot=args.pilot)
         elif args.action == "report":
-            identity = args.run_id or fingerprint(read_json(DATA / "manifest.json"))
-            value = report_run(DATA / "runs" / identity)
-        elif (DATA / "manifest.json").exists():
-            value = manifest_status(read_json(DATA / "manifest.json"))
+            identity = args.run_id or fingerprint(read_json(data_path / "manifest.json"))
+            value = report_run(data_path / "runs" / identity)
+        elif (data_path / "manifest.json").exists():
+            value = manifest_status(read_json(data_path / "manifest.json"), pilot=args.pilot)
             value["live_requests"] = 0
         else:
-            value = {"mode": "offline", "live_requests": 0, "next": "prepare"}
+            value = {
+                "mode": PILOT_MODE if args.pilot else "offline",
+                "live_requests": 0,
+                "next": "prepare --pilot" if args.pilot else "prepare",
+            }
         print(json.dumps(value, ensure_ascii=False, indent=2))
         return 0
     except (OSError, ValueError, RecursionError) as exc:

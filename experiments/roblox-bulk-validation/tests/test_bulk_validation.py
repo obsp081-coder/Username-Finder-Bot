@@ -1,6 +1,7 @@
 """Hypothetical fixtures only: no account histories or live responses are asserted."""
 
 import copy
+import csv
 import http.client
 import importlib.util
 import json
@@ -102,7 +103,7 @@ def setup(path, manifest):
     return path
 
 
-def simulate(tmp_path, manifest, *, fault=None, cancel=None, clock=None):
+def simulate(tmp_path, manifest, *, fault=None, cancel=None, clock=None, pilot=False):
     setup(tmp_path, manifest)
     clock = clock or Clock()
     calls = []
@@ -137,8 +138,15 @@ def simulate(tmp_path, manifest, *, fault=None, cancel=None, clock=None):
         cancel=cancel,
         wait=clock.wait,
         monotonic=clock.now,
+        pilot=pilot,
     )
     return summary, calls, clock, tmp_path / "runs" / poc.fingerprint(manifest)
+
+
+def pilot_from_full(path, manifest):
+    path.mkdir(exist_ok=True)
+    poc.write_new(path / "manifest.json", manifest)
+    return poc.prepare_pilot(path)
 
 
 @pytest.mark.parametrize("requested,current", [("Example", "Example"), ("EXAMPLE", "example")])
@@ -342,15 +350,20 @@ def test_full_run_sequential_paced_budget_and_evidence(tmp_path, manifest):
         response({"token": "do-not-record-this-value"}),
     ],
 )
-def test_first_failure_stops_no_retry_or_endpoint_fallback(tmp_path, manifest, fault):
-    summary, calls, clock, run = simulate(tmp_path, manifest, fault=lambda *_: fault)
+@pytest.mark.parametrize("pilot", [False, True])
+def test_first_failure_stops_no_retry_or_endpoint_fallback(tmp_path, manifest, fault, pilot):
+    if pilot:
+        manifest = pilot_from_full(tmp_path / "source", manifest)
+    path = tmp_path / "execution"
+    summary, calls, clock, run = simulate(path, manifest, fault=lambda *_: fault, pilot=pilot)
     assert len(calls) == 1 and not clock.waits and summary["stop_reason"] != "completed"
     before = (run / "events.jsonl").read_bytes()
     with pytest.raises(FileExistsError):
         poc.run_experiment(
-            tmp_path,
+            path,
             acknowledge=lambda _: "RUN " + poc.fingerprint(manifest),
             transport=lambda _: pytest.fail("No replay allowed"),
+            pilot=pilot,
         )
     assert (run / "events.jsonl").read_bytes() == before
     if b'"token"' in fault.body:
@@ -441,8 +454,12 @@ def test_read_only_reporting_preserves_journal_and_manual_notes(tmp_path, manife
     assert (run / "events.jsonl").read_bytes() == damaged
 
 
-def test_real_subprocess_crash_preserves_intent_and_blocks_replay(tmp_path, manifest):
-    setup(tmp_path, manifest)
+@pytest.mark.parametrize("pilot", [False, True])
+def test_real_subprocess_crash_preserves_intent_and_blocks_replay(tmp_path, manifest, pilot):
+    if pilot:
+        manifest = pilot_from_full(tmp_path / "source", manifest)
+    path = tmp_path / "execution"
+    setup(path, manifest)
     code = """
 import importlib.util, os, pathlib, socket, sys
 spec=importlib.util.spec_from_file_location('experiment',sys.argv[1])
@@ -450,21 +467,25 @@ p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
 def forbidden(*a, **k): raise AssertionError('No live network')
 socket.socket.connect=forbidden
 path=pathlib.Path(sys.argv[2]);m=p.strict_json((path/'manifest.json').read_bytes())
-p.run_experiment(path,acknowledge=lambda _: 'RUN '+p.fingerprint(m),transport=lambda _: os._exit(73))
+p.run_experiment(path,acknowledge=lambda _: 'RUN '+p.fingerprint(m),transport=lambda _: os._exit(73),
+                 pilot=sys.argv[3]=='pilot')
 """
     result = subprocess.run(
-        [sys.executable, "-B", "-c", code, str(SCRIPT), str(tmp_path)], capture_output=True, timeout=15
+        [sys.executable, "-B", "-c", code, str(SCRIPT), str(path), "pilot" if pilot else "full"],
+        capture_output=True,
+        timeout=15,
     )
     assert result.returncode == 73, result.stderr.decode(errors="replace")
-    run = tmp_path / "runs" / poc.fingerprint(manifest)
+    run = path / "runs" / poc.fingerprint(manifest)
     summary = poc.report_run(run)
     assert summary["unanswered_delivery_uncertain_attempts"] == [1]
     assert summary["stop_reason"] == "interrupted_no_durable_stop"
     with pytest.raises(FileExistsError):
         poc.run_experiment(
-            tmp_path,
+            path,
             acknowledge=lambda _: "RUN " + poc.fingerprint(manifest),
             transport=lambda _: pytest.fail("Never replay uncertain dispatch"),
+            pilot=pilot,
         )
 
 
@@ -673,3 +694,244 @@ def test_cleanup_failure_preserves_received_response(monkeypatch):
     connection.close = fail
     r = poc.Transport()({"kind": "bulk", "method": "POST", "url": poc.BULK_URL, "usernames": ["Example"]})
     assert r.body == b'{"data":[]}' and r.error == "cleanup_error" and not r.complete
+
+
+def test_pilot_reuses_exact_source_order_and_preserves_full_manifest(tmp_path, manifest, monkeypatch):
+    # Deliberately reverse the fixture rows: the pilot must not sort or cherry-pick.
+    manifest["candidates"].reverse()
+    pilot = pilot_from_full(tmp_path, manifest)
+    source = (tmp_path / "manifest.json").read_bytes()
+    expected = [r for r in manifest["candidates"] if r["category"] == "random"]
+    assert pilot["candidates"] == expected and len(expected) == 20
+    assert pilot["mode"] == "RANDOM_BULK_PILOT"
+    assert pilot["sample_origin"]["source_manifest_sha256"] == poc.fingerprint(manifest)
+    assert poc.validate_pilot_manifest(pilot) == []
+    frozen = (tmp_path / "random-pilot/manifest.json").read_bytes()
+    monkeypatch.setattr(poc.secrets, "choice", lambda _: pytest.fail("Never regenerate an existing sample"))
+    assert poc.prepare_pilot(tmp_path) == pilot
+    assert (tmp_path / "random-pilot/manifest.json").read_bytes() == frozen
+    assert (tmp_path / "manifest.json").read_bytes() == source
+
+
+def test_pilot_fresh_fallback_only_when_original_unavailable(tmp_path, monkeypatch):
+    pilot = poc.prepare_pilot(tmp_path)
+    names = [r["requested_username"] for r in pilot["candidates"]]
+    assert len(set(names)) == 20 and all(len(n) == 4 and poc.valid_name(n) for n in names)
+    assert pilot["sample_origin"]["kind"] == "fresh_unbiased_sample_original_unavailable"
+    assert pilot["sample_origin"]["source_manifest_sha256"] is None
+    assert not (tmp_path / "manifest.json").exists()
+    monkeypatch.setattr(poc.secrets, "choice", lambda _: pytest.fail("Generate only once"))
+    assert poc.prepare_pilot(tmp_path) == pilot
+
+
+@pytest.mark.parametrize(
+    "change", ["incomplete", "duplicate", "invalid", "wrong_mode", "nonrandom", "ownership", "reordered"]
+)
+def test_invalid_pilot_blocked_before_ack_or_dispatch(tmp_path, manifest, change):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    if change == "incomplete":
+        pilot["candidates"].pop()
+    elif change == "duplicate":
+        pilot["candidates"][0]["requested_username"] = pilot["candidates"][1]["requested_username"].upper()
+    elif change == "invalid":
+        pilot["candidates"][0]["requested_username"] = "bad!"
+    elif change == "wrong_mode":
+        pilot["mode"] = "FULL_SEMANTIC_VALIDATION"
+    elif change == "nonrandom":
+        pilot["candidates"][0]["category"] = "current"
+    elif change == "ownership":
+        pilot["candidates"][0]["independently_established"] = True
+    else:
+        pilot["candidates"].reverse()
+    path = setup(tmp_path / "execution", pilot)
+    assert poc.validate_pilot_manifest(pilot)
+    with pytest.raises(ValueError, match="incomplete"):
+        poc.run_experiment(
+            path,
+            pilot=True,
+            acknowledge=lambda _: pytest.fail("Invalid pilot must block first"),
+            transport=lambda _: pytest.fail("No dispatch for invalid pilot"),
+        )
+    assert not (path / "runs").exists()
+
+
+def test_bad_existing_sample_never_silently_generates_replacement(tmp_path, manifest, monkeypatch):
+    manifest["candidates"] = manifest["candidates"][:-1]
+    poc.write_new(tmp_path / "manifest.json", manifest)
+    source = (tmp_path / "manifest.json").read_bytes()
+    monkeypatch.setattr(poc.secrets, "choice", lambda _: pytest.fail("Bad source is not missing source"))
+    with pytest.raises(ValueError, match="exactly 20"):
+        poc.prepare_pilot(tmp_path)
+    assert source == (tmp_path / "manifest.json").read_bytes()
+    assert not (tmp_path / "random-pilot").exists()
+
+
+def test_full_and_pilot_review_gates_are_separate(tmp_path, manifest):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    assert poc.validate_manifest(pilot)
+    assert poc.validate_pilot_manifest(manifest)
+    path = setup(tmp_path / "execution", pilot)
+    with pytest.raises(ValueError, match="incomplete"):
+        poc.reviewed_manifest(path)  # Full semantic mode cannot accept a pilot.
+    assert poc.reviewed_manifest(path, pilot=True)[0] == pilot
+    for row in pilot["candidates"]:
+        row["limitations"] += " edited after review"
+    (path / "manifest.json").write_bytes(poc.encoded(pilot))
+    with pytest.raises(FileNotFoundError):
+        poc.reviewed_manifest(path, pilot=True)
+    assert not (path / "runs").exists()
+
+
+def test_pilot_complete_21_attempts_sequential_paced_and_auditable(tmp_path, manifest):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    summary, calls, clock, run = simulate(tmp_path / "execution", pilot, pilot=True)
+    names = [r["requested_username"] for r in pilot["candidates"]]
+    assert summary["mode"] == "RANDOM_BULK_PILOT" and summary["usernames"] == names
+    assert summary["maximum_attempts"] == summary["planned_attempts"] == 21
+    assert summary["bulk_requested_usernames"] == summary["individual_attempted_usernames"] == names
+    assert len(calls) == summary["complete_http_responses"] == 21
+    assert [r["kind"] for r in calls] == ["bulk"] + ["individual"] * 20
+    assert calls[0]["usernames"] == names
+    assert [r["usernames"][0] for r in calls[1:]] == names
+    assert len(clock.waits) == 20 and clock.waits == [10] * 20
+    assert summary["elapsed_seconds_including_pacing"] == pytest.approx(202.625)
+    assert summary["latency_seconds"]["bulk"]["count"] == 1
+    assert summary["latency_seconds"]["individual"]["count"] == 20
+    assert summary["taken_api_agreements"] == 20
+    assert summary["potential_shortcut_usernames_api_only"] == names
+    assert not summary["independently_verified_accuracy"]
+    events, _ = poc.read_events(run / "events.jsonl")
+    assert events[0]["maximum_attempts"] == 21 and events[0]["planned_attempts"] == 21
+    journal = (run / "events.jsonl").read_bytes()
+    worksheet = (run / "manual_comparison.csv").read_bytes()
+    assert poc.report_run(run)["usernames"] == names
+    assert (run / "events.jsonl").read_bytes() == journal
+    assert (run / "manual_comparison.csv").read_bytes() == worksheet
+
+
+@pytest.mark.parametrize("bulk_case", ["missing", "alias"])
+def test_pilot_unresolved_is_not_available_or_automatic_contradiction(tmp_path, manifest, bulk_case):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+
+    def fault(request, _):
+        if request["kind"] == "bulk":
+            data = (
+                []
+                if bulk_case == "missing"
+                else [record(n, name=f"renamed{i}", id=1000 + i) for i, n in enumerate(request["usernames"])]
+            )
+            return response({"data": data})
+        return response({"code": 0, "message": "Username is valid"})
+
+    summary, calls, _, _ = simulate(tmp_path / "execution", pilot, pilot=True, fault=fault)
+    assert len(calls) == 21 and summary["stop_reason"] == "completed"
+    assert summary["bulk_preliminary_counts"] == {"Unresolved": 20}
+    assert summary["individual_preliminary_counts"] == {"Available": 20}
+    assert not summary["contradictions"] and not summary["potential_shortcut_usernames_api_only"]
+    assert summary["compared_without_conflict"] == 20
+    assert (
+        len(
+            summary["missing_bulk_records"]
+            if bulk_case == "missing"
+            else summary["historical_or_different_current_names"]
+        )
+        == 20
+    )
+
+
+def test_pilot_contradiction_preserves_sources_and_stops_after_two_attempts(tmp_path, manifest):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    summary, calls, _, run = simulate(
+        tmp_path / "execution",
+        pilot,
+        pilot=True,
+        fault=lambda r, _: (
+            response({"code": 0, "message": "Username is valid"}) if r["kind"] == "individual" else None
+        ),
+    )
+    assert len(calls) == 2 and summary["contradictions"]
+    assert len(summary["usernames"]) == len(summary["bulk_requested_usernames"]) == 20
+    assert summary["individual_attempted_usernames"] == [pilot["candidates"][0]["requested_username"]]
+    assert summary["bulk_preliminary_counts"] == {"Taken": 20}
+    assert summary["individual_preliminary_counts"]["Available"] == 1
+    assert summary["comparison_conclusion_counts"] == {"Unknown": 20}
+    assert not summary["potential_shortcut_usernames_api_only"]
+    events, _ = poc.read_events(run / "events.jsonl")
+    assert len([e for e in events if e["event"] == "response"]) == 2
+
+
+def test_pilot_invalid_bulk_is_not_reported_as_valid_missing_records(tmp_path, manifest):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    summary, calls, _, run = simulate(
+        tmp_path / "execution",
+        pilot,
+        pilot=True,
+        fault=lambda r, _: response({"data": [record(r["usernames"][0])] * 2}),
+    )
+    assert len(calls) == 1 and summary["stop_reason"] != "completed"
+    assert not summary["missing_bulk_records"]
+    assert not summary["individual_attempted_usernames"]
+    csv_path = next(run.glob("comparison-*.csv"))
+    with csv_path.open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert all(r["bulk_interpretation_stop_reason"] for r in rows)
+
+
+def test_pilot_budget_enforced_before_and_during_dispatch(tmp_path, manifest, monkeypatch):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+    plan = poc.request_plan(pilot)
+    monkeypatch.setattr(poc, "request_plan", lambda _: plan)
+
+    # Extend after preflight to exercise the in-loop bound as well.
+    def append_extra(request, attempt):
+        if attempt == 1:
+            plan.append(dict(plan[-1]))
+
+    summary, calls, clock, _ = simulate(tmp_path / "execution", pilot, pilot=True, fault=append_extra)
+    assert len(calls) == 21 and len(clock.waits) == 20
+    assert summary["stop_reason"] == "request_budget_exhausted"
+    path = setup(tmp_path / "preflight", pilot)
+    with pytest.raises(ValueError, match="budget"):
+        poc.run_experiment(
+            path,
+            pilot=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(pilot),
+            transport=lambda _: pytest.fail("22 planned attempts must fail before dispatch"),
+        )
+    assert not (path / "runs").exists()
+
+
+def test_pilot_cancel_and_metadata_edits_do_not_reset_lifetime_budget(tmp_path, manifest):
+    pilot = pilot_from_full(tmp_path / "source", manifest)
+
+    class CancelClock(Clock):
+        def wait(self, _):
+            return True
+
+    path = tmp_path / "execution"
+    summary, calls, _, run = simulate(path, pilot, pilot=True, clock=CancelClock())
+    assert len(calls) == 1 and summary["stop_reason"] == "cancelled_during_pacing"
+    assert not summary["individual_attempted_usernames"]
+    journal = (run / "events.jsonl").read_bytes()
+    pilot["semantic_limitations"] += "; revised review notes"
+    (path / "manifest.json").write_bytes(poc.encoded(pilot))
+    poc.review_manifest(path, pilot=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(pilot))
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            pilot=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(pilot),
+            transport=lambda _: pytest.fail("New review cannot reset pilot budget"),
+        )
+    assert (run / "events.jsonl").read_bytes() == journal
+
+
+def test_pilot_cli_preparation_status_and_default_remain_offline(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(poc, "DATA", tmp_path)
+    assert poc.main(["prepare", "--pilot"]) == 0
+    assert "RANDOM_BULK_PILOT" in capsys.readouterr().out
+    assert poc.main(["status", "--pilot"]) == 0
+    assert '"maximum_attempts": 21' in capsys.readouterr().out
+    assert poc.main([]) == 0 and '"mode": "offline"' in capsys.readouterr().out
+    assert not (tmp_path / "random-pilot/reviews").exists()
+    assert not (tmp_path / "random-pilot/runs").exists()
