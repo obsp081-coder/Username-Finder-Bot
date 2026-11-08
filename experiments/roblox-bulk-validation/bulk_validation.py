@@ -37,6 +37,8 @@ DATA = Path(__file__).resolve().parent / "output"
 MAX_REQUESTS = 42
 PILOT_MODE = "RANDOM_BULK_PILOT"
 PILOT_MAX_REQUESTS = 21
+COMPARISON_MODE = "SAVED_BULK_INDIVIDUAL_COMPARISON"
+BULK_POLICY = "bulk-current-name-v2-bounded-account-names"
 BATCH_SIZE = 20
 PACE_SECONDS = 10.0
 TIMEOUT_SECONDS = 10.0
@@ -92,6 +94,11 @@ def key(value):
     if not valid_name(value):
         raise ValueError("Invalid ASCII Roblox username")
     return value.lower()
+
+
+def safe_account_name(value):
+    # A bounded account representation, not a claim about registration syntax.
+    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]{1,128}", value) is not None
 
 
 def fingerprint(manifest):
@@ -342,14 +349,20 @@ def validate_manifest(manifest):
     return errors
 
 
-def manifest_status(manifest, *, pilot=False):
+def manifest_status(manifest, *, pilot=False, comparison=False):
     rows = manifest.get("candidates", []) if isinstance(manifest, dict) else []
     rows = rows if isinstance(rows, list) else []
     return {
         "fingerprint": fingerprint(manifest),
-        "mode": PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
-        "maximum_attempts": PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS,
-        "errors": validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest),
+        "mode": COMPARISON_MODE if comparison else PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
+        "maximum_attempts": 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS,
+        "errors": (
+            validate_comparison_manifest(manifest)
+            if comparison
+            else validate_pilot_manifest(manifest)
+            if pilot
+            else validate_manifest(manifest)
+        ),
         "categories": dict(Counter(str(r.get("category")) for r in rows if isinstance(r, dict))),
         "restricted_case_gap": manifest.get("restricted_case_gap", "") if isinstance(manifest, dict) else "",
         "independent_evidence_note": "Reviewer declarations; no automatic source verification",
@@ -401,31 +414,34 @@ def interpret_bulk(names, response):
         return unresolved, "malformed_bulk_json"
     if not isinstance(body, dict) or set(body) != {"data"} or not isinstance(body["data"], list):
         return unresolved, "unexpected_bulk_schema"
-    records, ids = {}, {}
+    records, ids, current_ids = {}, {}, {}
     for row in body["data"]:
         if (
             not isinstance(row, dict)
             or not {"requestedUsername", "name", "id"} <= row.keys()
             or row.keys() - {"requestedUsername", "name", "id", "displayName", "hasVerifiedBadge"}
             or not valid_name(row.get("requestedUsername"))
-            or not valid_name(row.get("name"))
+            or not safe_account_name(row.get("name"))
             or type(row.get("id")) is not int
             or row["id"] <= 0
             or ("displayName" in row and not isinstance(row["displayName"], str))
             or ("hasVerifiedBadge" in row and type(row["hasVerifiedBadge"]) is not bool)
         ):
             return unresolved, "unsafe_bulk_record"
-        requested, current, uid = key(row["requestedUsername"]), key(row["name"]), row["id"]
+        requested, current, uid = key(row["requestedUsername"]), row["name"].lower(), row["id"]
         if requested not in unresolved:
             return unresolved, "unrequested_bulk_record"
         if requested in records:
             return unresolved, "duplicate_or_conflicting_bulk_record"
         if uid in ids and ids[uid] != current:
             return unresolved, "conflicting_account_names"
+        if current in current_ids and current_ids[current] != uid:
+            return unresolved, "conflicting_account_ids"
+        current_ids[current] = uid
         ids[uid], records[requested] = current, row
     # No positive result survives an invalid later record in the same response.
     for requested, row in records.items():
-        matched = key(row["name"]) == requested
+        matched = row["name"].lower() == requested
         unresolved[requested] = {
             "preliminary_classification": "Taken" if matched else "Unresolved",
             "reason": "current_name_and_id_api_only" if matched else "historical_or_different_current_name",
@@ -440,7 +456,7 @@ def compare_evidence(candidate, bulk, individual=None):
     if row:
         expected = candidate.get("expected_current_username")
         uid = candidate.get("expected_user_id")
-        if valid_name(expected) and key(expected) != key(row["name"]):
+        if valid_name(expected) and key(expected) != row["name"].lower():
             return "documented_current_name_conflict"
         if uid is not None and uid != row["id"]:
             return "documented_account_id_conflict"
@@ -618,15 +634,212 @@ def read_events(path):
     return events, warnings
 
 
+def saved_pilot_analysis(root, run_id):
+    """Read and verify one archived, stopped bulk-only pilot; never dispatch or edit it."""
+    if not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{64}", run_id):
+        raise ValueError("A full source pilot fingerprint is required")
+    run = Path(root) / "random-pilot" / "runs" / run_id
+    for path in (
+        Path(root),
+        run.parent.parent,
+        run.parent,
+        run,
+        *(run / n for n in ("manifest.json", "review.json", "events.jsonl")),
+    ):
+        if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+            raise ValueError("Redirected source evidence is not allowed")
+    manifest = read_json(run / "manifest.json")
+    if validate_pilot_manifest(manifest) or fingerprint(manifest) != run_id:
+        raise ValueError("Source pilot manifest binding is invalid")
+    with (run / "events.jsonl").open("rb") as stream:
+        raw_journal = stream.read(MAX_FILE + 1)
+    if len(raw_journal) > MAX_FILE or not raw_journal.endswith(b"\n"):
+        raise ValueError("Source journal is oversized or truncated")
+    events, warnings = read_events(run / "events.jsonl")
+    if warnings or [e.get("event") for e in events] != [
+        "begin",
+        "request_intent",
+        "response",
+        "bulk_interpretation",
+        "stop",
+    ]:
+        raise ValueError("Source must be a complete stopped pilot with one bulk attempt and no individuals")
+    begin, intent, observed, original, stop = events
+    review = read_json(run / "review.json")
+    if (
+        begin.get("manifest_sha256") != run_id
+        or begin.get("mode") != PILOT_MODE
+        or begin.get("maximum_attempts") != 21
+        or begin.get("planned_attempts") != 21
+        or begin.get("interpretation_policy") != "bulk-current-name-v1"
+        or not isinstance(review, dict)
+        or review.get("manifest_sha256") != run_id
+        or review.get("acknowledgment") != "REVIEW " + run_id
+        or review.get("protocol_sha256") != begin.get("individual_protocol_sha256")
+        or not re.fullmatch(r"[0-9a-f]{64}", str(review.get("protocol_sha256", "")))
+        or any(type(e.get("attempt")) is not int or e["attempt"] != 1 for e in events[1:4])
+        or stop.get("dispatch_intents") != 1
+        or stop.get("reason") != "unsafe_bulk_record"
+        or original.get("stop_reason") != stop["reason"]
+        or original.get("source") != "bulk_lookup"
+        or original.get("independently_verified") is not False
+    ):
+        raise ValueError("Source review, policy, attempt, or original stop binding is invalid")
+    names = [r["requested_username"] for r in manifest["candidates"]]
+    if (
+        intent.get("request") != request_plan(manifest)[0]
+        or intent.get("bulk_parameters") != {"usernames": names, "excludeBannedUsers": False}
+        or intent.get("individual_parameters") is not None
+        or not isinstance(original.get("mapping"), dict)
+        or set(original["mapping"]) != {key(n) for n in names}
+    ):
+        raise ValueError("Source request or original interpretation does not bind to the sample")
+    try:
+        timestamps = [datetime.fromisoformat(e["recorded_at_utc"]) for e in events]
+        request_time = datetime.fromisoformat(intent["request_at_utc"])
+        response_time = datetime.fromisoformat(observed["response_at_utc"])
+    except (KeyError, TypeError) as exc:
+        raise ValueError("Missing or invalid source event timestamps") from exc
+    if (
+        any(t.tzinfo is None for t in [*timestamps, request_time, response_time])
+        or timestamps != sorted(timestamps)
+        or request_time > response_time
+    ):
+        raise ValueError("Invalid source event timestamps")
+    evidence = observed.get("response")
+    if (
+        not isinstance(evidence, dict)
+        or type(evidence.get("status")) is not int
+        or evidence.get("complete") is not True
+        or evidence.get("challenge") is not False
+        or evidence.get("error") != ""
+        or evidence.get("body_omitted_for_sensitive_fields") is not False
+        or not isinstance(evidence.get("headers"), dict)
+        or any(k not in SAFE_HEADERS or not isinstance(v, str) for k, v in evidence["headers"].items())
+        or type(evidence.get("latency_seconds")) not in (int, float)
+        or not math.isfinite(evidence["latency_seconds"])
+        or evidence["latency_seconds"] < 0
+        or not isinstance(evidence.get("body_base64"), str)
+    ):
+        raise ValueError("Incomplete or unsafe saved response metadata")
+    raw = base64.b64decode(evidence["body_base64"], validate=True)
+    if (
+        len(raw) > protocol.MAX_BODY
+        or digest(raw) != evidence.get("body_sha256")
+        or evidence.get("body_text") != raw[:65536].decode("utf-8", errors="replace")
+        or evidence.get("body_text_is_preview") is not (len(raw) > 65536)
+        or (
+            "content-length" in evidence["headers"] and evidence["headers"]["content-length"] != str(len(raw))
+        )
+    ):
+        raise ValueError("Saved response integrity check failed")
+    response = protocol.Response(
+        status=evidence["status"],
+        headers=evidence["headers"],
+        body=raw,
+        elapsed=evidence["latency_seconds"],
+        complete=True,
+    )
+    restriction = response_stop(response)
+    if restriction:
+        raise ValueError("Saved response restriction: " + restriction)
+    mapping, corrected_stop = interpret_bulk(names, response)
+    return {
+        "source_run_id": run_id,
+        "source_files_sha256": {
+            n: digest((run / n).read_bytes()) for n in ("manifest.json", "review.json", "events.jsonl")
+        },
+        "bulk_response_sha256": evidence["body_sha256"],
+        "manifest": manifest,
+        "original_events": events,
+        "original_stop_reason": stop["reason"],
+        "original_policy": begin["interpretation_policy"],
+        "corrected_policy": BULK_POLICY,
+        "corrected_mapping": mapping,
+        "corrected_stop_reason": corrected_stop,
+        "bulk_preliminary_counts": dict(Counter(r["preliminary_classification"] for r in mapping.values())),
+        "individual_attempts": 0,
+        "independent_confirmations": 0,
+    }
+
+
+def reanalyze_pilot(root, run_id):
+    analysis = saved_pilot_analysis(root, run_id)
+    destination = data_directory(Path(root) / "reanalysis" / run_id)
+    path = destination / ("analysis-" + str(uuid.uuid4()) + ".json")
+    write_new(path, {"generated_at_utc": utcnow(), "analysis": analysis})
+    return {
+        "analysis_file": str(path.resolve()),
+        "original_stop_reason": analysis["original_stop_reason"],
+        "corrected_stop_reason": analysis["corrected_stop_reason"],
+        "bulk_preliminary_counts": analysis["bulk_preliminary_counts"],
+        "individual_attempts": 0,
+        "independent_confirmations": 0,
+        "live_requests": 0,
+    }
+
+
+def validate_comparison_manifest(manifest):
+    if not isinstance(manifest, dict) or manifest.get("mode") != COMPARISON_MODE:
+        return ["Expected an independently authorized saved-bulk comparison manifest"]
+    errors = validate_pilot_manifest(dict(manifest, mode=PILOT_MODE))
+    if manifest.get("corrected_policy") != BULK_POLICY or any(
+        not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get(k, "")))
+        for k in ("source_run_id", "source_analysis_sha256")
+    ):
+        errors.append("Invalid saved source/policy binding")
+    return errors
+
+
+def comparison_analysis(path, manifest):
+    errors = validate_comparison_manifest(manifest)
+    if errors:
+        raise ValueError("Comparison blocked: " + "; ".join(errors))
+    analysis = saved_pilot_analysis(path.parent.parent, manifest["source_run_id"])
+    if (
+        analysis["corrected_stop_reason"]
+        or analysis["manifest"]["candidates"] != manifest["candidates"]
+        or fingerprint(analysis) != manifest["source_analysis_sha256"]
+        or read_json(path / "source_analysis.json") != analysis
+    ):
+        raise ValueError("Saved bulk is uninterpretable, changed, or does not match the reviewed comparison")
+    return analysis
+
+
+def prepare_comparison(root, run_id):
+    analysis = saved_pilot_analysis(root, run_id)
+    if analysis["corrected_stop_reason"]:
+        raise ValueError("Cannot prepare comparison: " + analysis["corrected_stop_reason"])
+    path = Path(root) / "individual-comparison" / run_id
+    if path.exists():
+        manifest = read_json(path / "manifest.json")
+        comparison_analysis(path, manifest)
+        return manifest
+    manifest = dict(
+        analysis["manifest"],
+        mode=COMPARISON_MODE,
+        source_run_id=run_id,
+        source_analysis_sha256=fingerprint(analysis),
+        corrected_policy=BULK_POLICY,
+    )
+    path.parent.mkdir(exist_ok=True)
+    path.mkdir()  # Never recreate or replace a prepared comparison or its lifetime run lock.
+    write_new(path / "source_analysis.json", analysis)
+    write_new(path / "manifest.json", manifest)
+    return manifest
+
+
 def review_path(path, manifest):
     return path / "reviews" / (fingerprint(manifest) + "-" + protocol_fingerprint()[:16] + ".json")
 
 
-def reviewed_manifest(path=DATA, *, pilot=False):
+def reviewed_manifest(path=DATA, *, pilot=False, comparison=False):
     manifest = read_json(path / "manifest.json")
-    errors = validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest)
+    errors = manifest_status(manifest, pilot=pilot, comparison=comparison)["errors"]
     if errors:
         raise ValueError("Manifest incomplete: " + "; ".join(errors))
+    if comparison:
+        comparison_analysis(path, manifest)
     review = read_json(review_path(path, manifest))
     if (
         not isinstance(review, dict)
@@ -638,26 +851,39 @@ def reviewed_manifest(path=DATA, *, pilot=False):
     return manifest, review
 
 
-def describe(manifest, *, pilot=False):
+def describe(manifest, *, pilot=False, comparison=False):
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
-    print(json.dumps(manifest_status(manifest, pilot=pilot), ensure_ascii=False, indent=2))
-    print(f"Endpoints: POST {BULK_URL}; GET {protocol.ENDPOINT}")
-    limit = PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    print(
+        json.dumps(
+            manifest_status(manifest, pilot=pilot, comparison=comparison), ensure_ascii=False, indent=2
+        )
+    )
+    print(
+        f"Live endpoint: GET {protocol.ENDPOINT}"
+        if comparison
+        else f"Endpoints: POST {BULK_URL}; GET {protocol.ENDPOINT}"
+    )
+    limit = 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
     print(f"Budget: at most {limit} attempts; sequential; timeout 10s; post-response pacing >=10s.")
     print("Stop on any failure/restriction/ambiguity/conflict; no retries or automatic resume.")
     print("API results are preliminary; no registration, credentials, or production database access.")
     print("Run only with other Roblox checkers stopped and no unresolved provider restriction.")
 
 
-def review_manifest(path=DATA, *, acknowledge=input, pilot=False):
+def review_manifest(path=DATA, *, acknowledge=input, pilot=False, comparison=False):
     path = data_directory(path)
     manifest = read_json(path / "manifest.json")
-    describe(manifest, pilot=pilot)
-    errors = validate_pilot_manifest(manifest) if pilot else validate_manifest(manifest)
+    describe(manifest, pilot=pilot, comparison=comparison)
+    errors = manifest_status(manifest, pilot=pilot, comparison=comparison)["errors"]
     if errors:
         raise ValueError("Review blocked: " + "; ".join(errors))
+    if comparison:
+        analysis = comparison_analysis(path, manifest)
+        print(json.dumps(analysis, ensure_ascii=False, indent=2))
     prompt = (
-        "Review the frozen random sample and its semantic limitations. Type REVIEW <fingerprint>: "
+        "Review saved bulk, derived policy, and new individual-only budget. Type REVIEW <fingerprint>: "
+        if comparison
+        else "Review the frozen random sample and its semantic limitations. Type REVIEW <fingerprint>: "
         if pilot
         else "Confirm public evidence and missing-category limitations. Type REVIEW <fingerprint>: "
     )
@@ -686,48 +912,61 @@ def run_experiment(
     wait=None,
     monotonic=time.monotonic,
     pilot=False,
+    comparison=False,
 ):
     path = data_directory(path)
-    manifest, review = reviewed_manifest(path, pilot=pilot)
-    describe(manifest, pilot=pilot)
+    manifest, review = reviewed_manifest(path, pilot=pilot, comparison=comparison)
+    analysis = comparison_analysis(path, manifest) if comparison else None
+    describe(manifest, pilot=pilot, comparison=comparison)
     answer = acknowledge("Manual live execution only. Type RUN <fingerprint>: ")
     if answer != "RUN " + fingerprint(manifest):
         raise ValueError("Live execution not acknowledged")
+    if comparison:
+        analysis = comparison_analysis(path, manifest)
     plan = request_plan(manifest)
-    limit = PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
+    if comparison:
+        plan = [r for r in plan if r["kind"] == "individual"]
+    limit = 20 if comparison else PILOT_MAX_REQUESTS if pilot else MAX_REQUESTS
     if len(plan) > limit:
         raise ValueError("Request budget exceeded before dispatch")
     run_started = monotonic()
     runs = path / "runs"
     # A pilot has one lifetime execution, even if someone edits reviewed metadata.
-    runs.mkdir(exist_ok=not pilot)
+    runs.mkdir(exist_ok=not (pilot or comparison))
     run = runs / fingerprint(manifest)
     run.mkdir()  # Existing evidence, even a crashed intent, permanently blocks implicit replay.
     write_new(run / "manifest.json", manifest)
     write_new(run / "review.json", review)
+    if comparison:
+        write_new(run / "source_analysis.json", analysis)
     journal = Journal(run / "events.jsonl")
     journal.append(
         {
             "event": "begin",
             "experiment_id": str(uuid.uuid4()),
             "manifest_sha256": fingerprint(manifest),
-            "mode": PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
+            "mode": COMPARISON_MODE if comparison else PILOT_MODE if pilot else "FULL_SEMANTIC_VALIDATION",
             "maximum_attempts": limit,
             "planned_attempts": len(plan),
             "pacing_seconds": PACE_SECONDS,
             "timeout_seconds": TIMEOUT_SECONDS,
             "experiment_source_sha256": digest(Path(__file__).read_bytes()),
             "individual_protocol_sha256": protocol_fingerprint(),
-            "interpretation_policy": "bulk-current-name-v1",
+            "interpretation_policy": BULK_POLICY,
         }
     )
     cancel = cancel or threading.Event()
     wait = wait or cancel.wait
     transport = transport or Transport()
     bulk_results, attempts, stop, previous_finished = {}, 0, "completed", None
+    if comparison:
+        bulk_results.update(analysis["corrected_mapping"])
     candidates = {key(r["requested_username"]): r for r in manifest["candidates"]}
     try:
         for request in plan:
+            if comparison and request["kind"] != "individual":
+                stop = "unexpected_nonindividual_request"
+                break
             if cancel.is_set():
                 stop = "cancelled_before_request"
                 break
@@ -867,10 +1106,17 @@ def run_experiment(
 def report_run(run):
     manifest = read_json(run / "manifest.json")
     events, warnings = read_events(run / "events.jsonl")
+    analysis = None
+    if manifest.get("mode") == COMPARISON_MODE:
+        analysis = read_json(run / "source_analysis.json")
+        if fingerprint(analysis) != manifest.get("source_analysis_sha256"):
+            raise ValueError("Archived source analysis integrity check failed")
     intents = {e["attempt"]: e for e in events if e.get("event") == "request_intent"}
     responses = {e["attempt"]: e for e in events if e.get("event") == "response"}
     mappings, individuals, contradictions = {}, {}, []
     bulk_stop_reasons = {}
+    if analysis:
+        mappings.update(analysis["corrected_mapping"])
     conflicted_names = set()
     for e in events:
         if e.get("event") == "bulk_interpretation":
@@ -897,6 +1143,9 @@ def report_run(run):
             for kind in ("bulk", "individual")
         }
         observed = {kind: responses.get(a, {}).get("response", {}) for kind, a in linked.items()}
+        source_events = analysis["original_events"] if analysis else []
+        if analysis:
+            observed["bulk"] = source_events[2]["response"]
         rows.append(
             {
                 "username": candidate["requested_username"],
@@ -904,7 +1153,21 @@ def report_run(run):
                 "documented_evidence_reference": candidate["evidence_reference"],
                 "documented_current_username": candidate.get("expected_current_username", ""),
                 "documented_independently_established": candidate["independently_established"],
-                "bulk_lookup_attempt": linked["bulk"],
+                "bulk_lookup_attempt": source_events[1]["attempt"] if analysis else linked["bulk"],
+                "saved_bulk_source_run": analysis["source_run_id"] if analysis else "",
+                "saved_bulk_journal_sha256": analysis["source_files_sha256"]["events.jsonl"]
+                if analysis
+                else "",
+                "original_bulk_interpretation": json.dumps(
+                    source_events[3]["mapping"].get(name) if analysis else None, ensure_ascii=False
+                ),
+                "original_bulk_stop_reason": analysis["original_stop_reason"] if analysis else "",
+                "corrected_bulk_policy": analysis["corrected_policy"] if analysis else "",
+                "bulk_response_at_utc": (
+                    source_events[2]["response_at_utc"]
+                    if analysis
+                    else responses.get(linked["bulk"], {}).get("response_at_utc", "")
+                ),
                 "bulk_http_status": observed["bulk"].get("status"),
                 "bulk_latency_seconds": observed["bulk"].get("latency_seconds"),
                 "bulk_preliminary_classification": bulk.get("preliminary_classification", "NotObserved"),
@@ -915,6 +1178,10 @@ def report_run(run):
                 "bulk_api_code": "",
                 "individual_classification": individual.get("classification", "NotObserved"),
                 "individual_validator_attempt": linked["individual"],
+                "individual_request_at_utc": intents.get(linked["individual"], {}).get("request_at_utc", ""),
+                "individual_response_at_utc": responses.get(linked["individual"], {}).get(
+                    "response_at_utc", ""
+                ),
                 "individual_http_status": observed["individual"].get("status"),
                 "individual_latency_seconds": observed["individual"].get("latency_seconds"),
                 "individual_api_code": individual.get("api_code"),
@@ -955,6 +1222,12 @@ def report_run(run):
         "mode": begin.get("mode", manifest.get("mode", "FULL_SEMANTIC_VALIDATION")),
         "maximum_attempts": begin.get("maximum_attempts"),
         "planned_attempts": begin.get("planned_attempts"),
+        "saved_bulk_source_run": analysis["source_run_id"] if analysis else None,
+        "saved_bulk_response_sha256": analysis["bulk_response_sha256"] if analysis else None,
+        "saved_bulk_original_stop_reason": analysis["original_stop_reason"] if analysis else None,
+        "saved_bulk_corrected_policy": analysis["corrected_policy"] if analysis else None,
+        "saved_bulk_latency_seconds": source_events[2]["response"]["latency_seconds"] if analysis else None,
+        "source_bulk_attempts_not_part_of_this_run": 1 if analysis else 0,
         "usernames": [r["username"] for r in rows],
         "bulk_requested_usernames": [
             n for e in intents.values() if e["request"]["kind"] == "bulk" for n in e["request"]["usernames"]
@@ -1097,34 +1370,65 @@ def report_run(run):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", nargs="?", choices=("status", "prepare", "review", "live", "report"), default="status"
+        "action",
+        nargs="?",
+        choices=("status", "prepare", "review", "live", "report", "reanalyze"),
+        default="status",
     )
     parser.add_argument("--run-id", help="Report an archived run by its full manifest SHA256")
-    parser.add_argument("--pilot", action="store_true", help="Use the separate 20-name RANDOM_BULK_PILOT")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--pilot", action="store_true", help="Use the separate 20-name RANDOM_BULK_PILOT")
+    modes.add_argument(
+        "--comparison-source", help="Individual-only follow-up linked to an archived pilot SHA256"
+    )
     args = parser.parse_args(argv)
     try:
-        data_path = DATA / "random-pilot" if args.pilot else DATA
-        if args.run_id and (args.action != "report" or not re.fullmatch(r"[0-9a-f]{64}", args.run_id)):
-            raise ValueError("--run-id requires report and a full lowercase SHA256")
-        if args.action == "prepare":
-            manifest = prepare_pilot(DATA) if args.pilot else prepare(DATA)
-            value = manifest_status(manifest, pilot=args.pilot)
+        comparison = args.comparison_source is not None
+        if comparison and not re.fullmatch(r"[0-9a-f]{64}", args.comparison_source):
+            raise ValueError("--comparison-source requires the full source pilot SHA256")
+        data_path = (
+            DATA / "individual-comparison" / args.comparison_source
+            if comparison
+            else DATA / "random-pilot"
+            if args.pilot
+            else DATA
+        )
+        if args.run_id and (
+            args.action not in ("report", "reanalyze") or not re.fullmatch(r"[0-9a-f]{64}", args.run_id)
+        ):
+            raise ValueError("--run-id requires report/reanalyze and a full lowercase SHA256")
+        if args.action == "reanalyze":
+            if not args.pilot or not args.run_id:
+                raise ValueError("Reanalysis requires --pilot --run-id <source fingerprint>")
+            value = reanalyze_pilot(DATA, args.run_id)
+        elif args.action == "prepare":
+            manifest = (
+                prepare_comparison(DATA, args.comparison_source)
+                if comparison
+                else prepare_pilot(DATA)
+                if args.pilot
+                else prepare(DATA)
+            )
+            value = manifest_status(manifest, pilot=args.pilot, comparison=comparison)
         elif args.action == "review":
-            review_manifest(data_path, pilot=args.pilot)
+            review_manifest(data_path, pilot=args.pilot, comparison=comparison)
             value = {"review_saved": True, "live_requests": 0}
         elif args.action == "live":
             if not sys.stdin.isatty():
                 raise ValueError("Live mode requires a user-operated interactive terminal")
-            value = run_experiment(data_path, pilot=args.pilot)
+            value = run_experiment(data_path, pilot=args.pilot, comparison=comparison)
         elif args.action == "report":
             identity = args.run_id or fingerprint(read_json(data_path / "manifest.json"))
             value = report_run(data_path / "runs" / identity)
         elif (data_path / "manifest.json").exists():
-            value = manifest_status(read_json(data_path / "manifest.json"), pilot=args.pilot)
+            manifest = read_json(data_path / "manifest.json")
+            if comparison:
+                comparison_analysis(data_path, manifest)
+            value = manifest_status(manifest, pilot=args.pilot, comparison=comparison)
             value["live_requests"] = 0
         else:
             value = {
-                "mode": PILOT_MODE if args.pilot else "offline",
+                "mode": COMPARISON_MODE if comparison else PILOT_MODE if args.pilot else "offline",
                 "live_requests": 0,
                 "next": "prepare --pilot" if args.pilot else "prepare",
             }

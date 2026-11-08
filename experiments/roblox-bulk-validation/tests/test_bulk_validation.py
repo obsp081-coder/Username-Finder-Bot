@@ -935,3 +935,463 @@ def test_pilot_cli_preparation_status_and_default_remain_offline(tmp_path, monke
     assert poc.main([]) == 0 and '"mode": "offline"' in capsys.readouterr().out
     assert not (tmp_path / "random-pilot/reviews").exists()
     assert not (tmp_path / "random-pilot/runs").exists()
+
+
+@pytest.mark.parametrize("current", ["roblox_user_12345678901", "__unusual__", "a" * 128])
+def test_bounded_unusual_account_names_are_unresolved_not_fatal(current):
+    source = record("Probe", name=current, id=12345678901, displayName="Probe")
+    mapping, stop = poc.interpret_bulk(["Probe", "Normal"], response({"data": [source, record("Normal")]}))
+    assert not stop and mapping["probe"]["preliminary_classification"] == "Unresolved"
+    assert mapping["probe"]["record"] == source
+    assert mapping["normal"]["preliminary_classification"] == "Taken"
+    assert not poc.compare_evidence({"category": "random"}, mapping["probe"])
+    assert poc.compare_evidence({"expected_current_username": "Probe"}, mapping["probe"])
+
+
+@pytest.mark.parametrize(
+    "current", [None, True, 12, [], {}, "", "a" * 129, "x\ny", "x\x00y", "na me", "n\u0430me"]
+)
+def test_unsafe_current_name_representations_remain_fatal(current):
+    mapping, stop = poc.interpret_bulk(
+        ["Probe", "Normal"], response({"data": [record("Normal"), record("Probe", name=current, id=13)]})
+    )
+    assert stop == "unsafe_bulk_record"
+    assert all(r["preliminary_classification"] == "Unresolved" for r in mapping.values())
+
+
+def test_conflicting_ids_for_same_current_name_are_fatal():
+    mapping, stop = poc.interpret_bulk(
+        ["Probe", "Normal"], response({"data": [record("Probe", name="Normal", id=13), record("Normal")]})
+    )
+    assert stop == "conflicting_account_ids"
+    assert all(r["preliminary_classification"] == "Unresolved" for r in mapping.values())
+
+
+def stopped_source(root, manifest):
+    """Synthetic v1 journal, deliberately retaining its old all-Unresolved interpretation."""
+    pilot = pilot_from_full(root / "input", manifest)
+    run_id = poc.fingerprint(pilot)
+    run = root / "random-pilot/runs" / run_id
+    run.parent.mkdir(parents=True)
+    setup(run, pilot)
+    poc.write_new(run / "review.json", poc.read_json(poc.review_path(run, pilot)))
+    names = [r["requested_username"] for r in pilot["candidates"]]
+    rows = [record(n, id=1000 + i) for i, n in enumerate(names)]
+    rows[12]["name"] = "roblox_user_12345678901"
+    journal = poc.Journal(run / "events.jsonl")
+    journal.append(
+        {
+            "event": "begin",
+            "mode": poc.PILOT_MODE,
+            "manifest_sha256": run_id,
+            "maximum_attempts": 21,
+            "planned_attempts": 21,
+            "interpretation_policy": "bulk-current-name-v1",
+            "individual_protocol_sha256": poc.protocol_fingerprint(),
+        }
+    )
+    journal.append(
+        {
+            "event": "request_intent",
+            "attempt": 1,
+            "request": poc.request_plan(pilot)[0],
+            "bulk_parameters": {"usernames": names, "excludeBannedUsers": False},
+            "individual_parameters": None,
+            "request_at_utc": poc.utcnow(),
+        }
+    )
+    journal.append(
+        {
+            "event": "response",
+            "attempt": 1,
+            "response_at_utc": poc.utcnow(),
+            "response": poc.public_response(response({"data": rows})),
+        }
+    )
+    journal.append(
+        {
+            "event": "bulk_interpretation",
+            "attempt": 1,
+            "source": "bulk_lookup",
+            "stop_reason": "unsafe_bulk_record",
+            "independently_verified": False,
+            "mapping": {
+                poc.key(n): {
+                    "preliminary_classification": "Unresolved",
+                    "reason": "missing_bulk_record",
+                    "api_code": None,
+                }
+                for n in names
+            },
+        }
+    )
+    journal.append({"event": "stop", "reason": "unsafe_bulk_record", "dispatch_intents": 1})
+    return run_id, run, pilot
+
+
+def original_bytes(run):
+    return {p.name: p.read_bytes() for p in run.iterdir() if p.is_file()}
+
+
+def edit_source_events(run, edit):
+    events, warnings = poc.read_events(run / "events.jsonl")
+    assert not warnings
+    edit(events)
+    (run / "events.jsonl").write_bytes(b"".join(poc.encoded(e) + b"\n" for e in events))
+
+
+def comparison_setup(root, manifest):
+    run_id, source, pilot = stopped_source(root, manifest)
+    prepared = poc.prepare_comparison(root, run_id)
+    path = root / "individual-comparison" / run_id
+    poc.review_manifest(path, comparison=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(prepared))
+    return path, prepared, source, pilot
+
+
+def test_offline_reanalysis_is_versioned_bound_and_nondestructive(tmp_path, manifest):
+    run_id, source, _ = stopped_source(tmp_path, manifest)
+    before = original_bytes(source)
+    first = poc.reanalyze_pilot(tmp_path, run_id)
+    second = poc.reanalyze_pilot(tmp_path, run_id)
+    assert first["analysis_file"] != second["analysis_file"]
+    assert first["bulk_preliminary_counts"] == {"Taken": 19, "Unresolved": 1}
+    assert first["original_stop_reason"] == "unsafe_bulk_record" and not first["corrected_stop_reason"]
+    assert first["individual_attempts"] == first["independent_confirmations"] == first["live_requests"] == 0
+    analysis = poc.read_json(Path(first["analysis_file"]))["analysis"]
+    assert analysis["original_events"][3]["stop_reason"] == "unsafe_bulk_record"
+    assert all(
+        r["preliminary_classification"] == "Unresolved"
+        for r in analysis["original_events"][3]["mapping"].values()
+    )
+    assert analysis["source_files_sha256"]["events.jsonl"] == poc.digest(before["events.jsonl"])
+    assert original_bytes(source) == before
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "body_hash",
+        "base64",
+        "preview",
+        "truncated",
+        "incomplete",
+        "http",
+        "retry_after",
+        "challenge",
+        "quota",
+        "review",
+        "binding",
+        "request",
+        "order",
+        "stop",
+        "attempt",
+        "extra_event",
+        "json",
+        "id",
+        "missing_time",
+        "boolean_latency",
+        "unexpected_header",
+    ],
+)
+def test_untrusted_saved_evidence_cannot_authorize_comparison(tmp_path, manifest, tamper):
+    run_id, source, _ = stopped_source(tmp_path, manifest)
+
+    def edit(events):
+        evidence = events[2]["response"]
+        if tamper == "body_hash":
+            evidence["body_sha256"] = "0" * 64
+        elif tamper == "base64":
+            evidence["body_base64"] = "!"
+        elif tamper == "preview":
+            evidence["body_text"] = "altered"
+        elif tamper == "incomplete":
+            evidence["complete"] = False
+        elif tamper == "http":
+            evidence["status"] = 429
+        elif tamper == "retry_after":
+            evidence["headers"]["retry-after"] = "60"
+        elif tamper == "quota":
+            evidence["headers"]["x-ratelimit-remaining"] = "0"
+        elif tamper == "challenge":
+            evidence["challenge"] = True
+        elif tamper == "binding":
+            events[0]["manifest_sha256"] = "0" * 64
+        elif tamper == "request":
+            events[1]["bulk_parameters"]["excludeBannedUsers"] = True
+        elif tamper == "order":
+            events[1]["request"]["usernames"].reverse()
+        elif tamper == "stop":
+            events[4]["reason"] = "http_429"
+        elif tamper == "attempt":
+            events[2]["attempt"] = 2
+        elif tamper == "extra_event":
+            events.append({"event": "request_intent", "attempt": 2})
+        elif tamper == "json":
+            events[2]["response"] = poc.public_response(response(body=b'{"data":[],"data":[]}'))
+        elif tamper == "id":
+            events[2]["response"] = poc.public_response(response({"data": [record("a000", id=True)]}))
+        elif tamper == "missing_time":
+            del events[2]["response_at_utc"]
+        elif tamper == "boolean_latency":
+            evidence["latency_seconds"] = True
+        elif tamper == "unexpected_header":
+            evidence["headers"]["set-cookie"] = "SyntheticForbiddenHeader"
+
+    edit_source_events(source, edit)
+    if tamper == "truncated":
+        p = source / "events.jsonl"
+        p.write_bytes(p.read_bytes()[:-1])
+    if tamper == "review":
+        p = source / "review.json"
+        value = poc.read_json(p)
+        value["acknowledgment"] = "REVIEW wrong"
+        p.write_bytes(poc.encoded(value))
+    with pytest.raises(ValueError):
+        poc.prepare_comparison(tmp_path, run_id)
+    assert not (tmp_path / "individual-comparison").exists()
+
+
+def test_followup_preparation_and_review_are_independent_and_offline(tmp_path, manifest, monkeypatch, capsys):
+    run_id, source, pilot = stopped_source(tmp_path, manifest)
+    before = original_bytes(source)
+    monkeypatch.setattr(poc, "DATA", tmp_path)
+    assert poc.main(["reanalyze", "--pilot", "--run-id", run_id]) == 0
+    assert poc.main(["prepare", "--comparison-source", run_id]) == 0
+    assert poc.main(["status", "--comparison-source", run_id]) == 0
+    assert '"maximum_attempts": 20' in capsys.readouterr().out
+    path = tmp_path / "individual-comparison" / run_id
+    prepared = poc.read_json(path / "manifest.json")
+    assert prepared["candidates"] == pilot["candidates"]
+    frozen = original_bytes(path)
+    assert poc.prepare_comparison(tmp_path, run_id) == prepared and original_bytes(path) == frozen
+    with pytest.raises(FileNotFoundError):
+        poc.run_experiment(path, comparison=True, transport=lambda _: pytest.fail("No review"))
+    assert not (path / "reviews").exists() and not (path / "runs").exists()
+    with pytest.raises(ValueError, match="acknowledged"):
+        poc.review_manifest(path, comparison=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(pilot))
+    assert original_bytes(source) == before
+
+
+def test_followup_20_individuals_pacing_and_final_comparison(tmp_path, manifest):
+    path, prepared, source, pilot = comparison_setup(tmp_path, manifest)
+    before = original_bytes(source)
+    clock, calls = Clock(), []
+    active = False
+
+    def transport(request):
+        nonlocal active
+        assert not active and request["kind"] == "individual"
+        active = True
+        calls.append(copy.deepcopy(request))
+        clock.at += 0.125
+        active = False
+        return response({"code": 1, "message": "Username is already in use"})
+
+    summary = poc.run_experiment(
+        path,
+        comparison=True,
+        transport=transport,
+        acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+        monotonic=clock.now,
+        wait=clock.wait,
+    )
+    names = [r["requested_username"] for r in pilot["candidates"]]
+    assert [r["usernames"][0] for r in calls] == names and len(calls) == 20
+    assert clock.waits == [10] * 19
+    assert summary["elapsed_seconds_including_pacing"] == pytest.approx(192.5)
+    assert summary["maximum_attempts"] == summary["dispatch_intents_including_failures"] == 20
+    assert summary["bulk_requested_usernames"] == [] and summary["individual_attempted_usernames"] == names
+    assert summary["bulk_preliminary_counts"] == {"Taken": 19, "Unresolved": 1}
+    assert summary["taken_api_agreements"] == 19 and summary["compared_without_conflict"] == 20
+    assert summary["source_bulk_attempts_not_part_of_this_run"] == 1
+    assert summary["saved_bulk_original_stop_reason"] == "unsafe_bulk_record"
+    assert summary["latency_seconds"]["bulk"]["count"] == 0
+    assert not summary["independently_verified_accuracy"]
+    run = path / "runs" / poc.fingerprint(prepared)
+    with next(run.glob("comparison-*.csv")).open(encoding="utf-8-sig", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == 20 and all(r["individual_response_at_utc"] for r in rows)
+    assert all(
+        json.loads(r["original_bulk_interpretation"])["preliminary_classification"] == "Unresolved"
+        for r in rows
+    )
+    assert rows[12]["bulk_preliminary_classification"] == "Unresolved"
+    assert original_bytes(source) == before
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+            transport=transport,
+        )
+    assert len(calls) == 20
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        response(status=401),
+        response(status=403),
+        response(status=429),
+        response(status=500),
+        response(headers={"content-type": "application/json", "retry-after": "60"}),
+        response(headers={"content-type": "application/json", "x-ratelimit-remaining": "0"}),
+        response(challenge=True),
+        response(complete=False),
+        response(error="timeout"),
+        response(body=b"{"),
+        response({"code": 999, "message": "Unexpected"}),
+        response({"code": True, "message": "Unexpected"}),
+        response({"errors": []}),
+        response({"code": 0, "message": "Username is valid"}),
+    ],
+)
+def test_followup_failure_or_conflict_stops_without_retry(tmp_path, manifest, fault):
+    path, prepared, source, _ = comparison_setup(tmp_path, manifest)
+    before = original_bytes(source)
+    calls, clock = [], Clock()
+
+    def transport(request):
+        assert request["kind"] == "individual"
+        calls.append(request)
+        return fault
+
+    summary = poc.run_experiment(
+        path,
+        comparison=True,
+        transport=transport,
+        acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+        monotonic=clock.now,
+        wait=clock.wait,
+    )
+    assert summary["dispatch_intents_including_failures"] == len(calls) == 1
+    assert summary["stop_reason"] != "completed" and not clock.waits
+    assert summary["comparison_conclusion_counts"] == {"Unknown": 20}
+    if fault.body == response({"code": 0, "message": "Username is valid"}).body:
+        assert summary["contradictions"] and summary["individual_preliminary_counts"]["Available"] == 1
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            transport=transport,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+        )
+    assert len(calls) == 1 and original_bytes(source) == before
+
+
+def test_followup_cancellation_and_edited_metadata_cannot_reset_budget(tmp_path, manifest):
+    path, prepared, source, _ = comparison_setup(tmp_path, manifest)
+    before = original_bytes(source)
+    calls = []
+
+    def transport(request):
+        calls.append(request)
+        return response({"code": 1, "message": "Username is already in use"})
+
+    summary = poc.run_experiment(
+        path,
+        comparison=True,
+        transport=transport,
+        acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+        wait=lambda _: True,
+    )
+    assert summary["stop_reason"] == "cancelled_during_pacing" and len(calls) == 1
+    prepared["semantic_limitations"] += "; revised notes"
+    (path / "manifest.json").write_bytes(poc.encoded(prepared))
+    poc.review_manifest(path, comparison=True, acknowledge=lambda _: "REVIEW " + poc.fingerprint(prepared))
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            transport=transport,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+        )
+    assert len(calls) == 1 and original_bytes(source) == before
+
+
+def test_followup_explicit_ack_and_preflight_budget(tmp_path, manifest, monkeypatch):
+    path, prepared, _, pilot = comparison_setup(tmp_path, manifest)
+    with pytest.raises(ValueError, match="acknowledged"):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(pilot),
+            transport=lambda _: pytest.fail("Original authorization cannot authorize a new run"),
+        )
+    assert not (path / "runs").exists()
+    original_plan = poc.request_plan
+
+    def excess_plan(value):
+        plan = original_plan(value)
+        if value["mode"] == poc.COMPARISON_MODE:
+            plan.append(plan[-1])
+        return plan
+
+    monkeypatch.setattr(poc, "request_plan", excess_plan)
+    with pytest.raises(ValueError, match="budget"):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+            transport=lambda _: pytest.fail("21 individual attempts are forbidden"),
+        )
+    assert not (path / "runs").exists()
+
+
+@pytest.mark.parametrize("tamper", ["source", "analysis", "names", "policy"])
+def test_followup_bindings_are_rechecked_before_execution(tmp_path, manifest, tamper):
+    path, prepared, source, _ = comparison_setup(tmp_path, manifest)
+    if tamper == "source":
+        edit_source_events(source, lambda events: events[4].update(note="Source changed since review"))
+    elif tamper == "analysis":
+        p = path / "source_analysis.json"
+        value = poc.read_json(p)
+        value["corrected_mapping"]["a000"]["preliminary_classification"] = "Available"
+        p.write_bytes(poc.encoded(value))
+    else:
+        if tamper == "names":
+            prepared["candidates"].reverse()
+        else:
+            prepared["corrected_policy"] = "unknown-policy"
+        (path / "manifest.json").write_bytes(poc.encoded(prepared))
+    with pytest.raises(ValueError):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            acknowledge=lambda _: pytest.fail("Changed evidence blocks first"),
+            transport=lambda _: pytest.fail("Never send with changed evidence"),
+        )
+    assert not (path / "runs").exists()
+
+
+def test_followup_real_process_crash_blocks_replay_and_preserves_original(tmp_path, manifest):
+    path, prepared, source, _ = comparison_setup(tmp_path, manifest)
+    before = original_bytes(source)
+    code = """
+import importlib.util, os, pathlib, socket, sys
+spec=importlib.util.spec_from_file_location('experiment',sys.argv[1])
+p=importlib.util.module_from_spec(spec);spec.loader.exec_module(p)
+def forbidden(*a, **k): raise AssertionError('No live network')
+socket.socket.connect=forbidden
+path=pathlib.Path(sys.argv[2]);m=p.read_json(path/'manifest.json')
+p.run_experiment(path,comparison=True,acknowledge=lambda _: 'RUN '+p.fingerprint(m),
+                 transport=lambda _: os._exit(73))
+"""
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", code, str(SCRIPT), str(path)], capture_output=True, timeout=15
+    )
+    assert result.returncode == 73, result.stderr.decode(errors="replace")
+    run = path / "runs" / poc.fingerprint(prepared)
+    summary = poc.report_run(run)
+    assert summary["unanswered_delivery_uncertain_attempts"] == [1]
+    assert summary["individual_preliminary_counts"] == {"NotObserved": 20}
+    assert summary["elapsed_seconds_including_pacing"] is None
+    archived = original_bytes(run)
+    with pytest.raises(FileExistsError):
+        poc.run_experiment(
+            path,
+            comparison=True,
+            acknowledge=lambda _: "RUN " + poc.fingerprint(prepared),
+            transport=lambda _: pytest.fail("Never replay uncertain delivery"),
+        )
+    assert original_bytes(run) == archived and original_bytes(source) == before
