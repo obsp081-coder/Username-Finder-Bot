@@ -46,7 +46,7 @@ for platform in platforms:
     if phase=='during_request':continue
     response=rp.Response(200,b'{"code":0,"message":"Username is valid"}',{'content-type':'application/json'})
     if platform=='X':
-        response=x.protocol.Response(200,b'{"valid":true,"reason":"available"}',{'content-type':'application/json'})
+        response=x.protocol.Response(200,b'{"valid":false,"reason":"taken"}',{'content-type':'application/json'})
     result=(result_for(task['username'],response,checked_at=at.isoformat()) if platform=='Roblox'
             else x.result_for(task['username'],response,checked_at=at.isoformat()))
     if phase=='after_response':continue

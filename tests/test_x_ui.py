@@ -391,9 +391,9 @@ def test_manual_preview_start_skip_filter_and_export(window, qtbot, monkeypatch,
     assert not panel.test_clock.calls
     panel.resume()
     wait_done(qtbot, panel)
-    assert panel.repo.counts() == {"Available": 2}
-    assert "غير مؤكد" in panel.table.item(0, 1).text()
-    panel.classification.setCurrentIndex(panel.classification.findData("Available"))
+    assert panel.repo.counts() == {"Taken": 2}
+    assert "Taken" in panel.table.item(0, 1).text()
+    panel.classification.setCurrentIndex(panel.classification.findData("Taken"))
     panel.search.setText("hzwu9")
     qtbot.waitUntil(lambda: len(panel.rows) == 1 and panel.rows[0]["username"] == "hzwu9")
     path = tmp_path / "x.csv"
@@ -429,10 +429,10 @@ def test_selected_recheck_confirmation_changes_and_roblox_separation(window, qtb
     panel.recheck_selected()
     assert len(panel.test_clock.calls) == 1
     monkeypatch.setattr(panel, "_confirm", lambda _: True)
-    panel.fetcher = lambda *a: response(False, "taken")
+    panel.fetcher = lambda *a: response(False, "is_banned_word")
     panel.recheck_selected()
     wait_done(qtbot, panel)
-    assert panel.rows[0]["classification"] == "Taken" and panel.rows[0]["changed"], panel.status.text()
+    assert panel.rows[0]["classification"] == "Reserved" and panel.rows[0]["changed"], panel.status.text()
     assert len(panel.repo.history("valid_name")) == 2
     assert window.roblox.repo.known_count() == 0
     panel.recheck_all()

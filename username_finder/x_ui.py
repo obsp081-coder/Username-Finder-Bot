@@ -95,7 +95,9 @@ class XPanel(QScrollArea):
         title = QLabel("فحص يوزرات X — تجريبي")
         title.setObjectName("title")
         layout.addWidget(title)
-        notice = QLabel("الفحص تجريبي • الإتاحة أولية ولا تضمن التسجيل؛ التفاصيل في صفحة الاتصال والتنبيهات.")
+        notice = QLabel(
+            "تحقق الإتاحة غير موثوق • إشارات available الحالية والقديمة تُقيَّم Unknown؛ الأدلة الأصلية محفوظة."
+        )
         notice.setWordWrap(True)
         notice.setObjectName("simulation")
         layout.addWidget(notice)
@@ -844,6 +846,12 @@ class XPanel(QScrollArea):
                 for r in self.rows
             ],
         )
+        for index, row in enumerate(self.rows):
+            if row.get("recorded_classification") == "Available":
+                self.table.item(index, 1).setToolTip(
+                    "التصنيف المسجل أصلًا: Available • التقييم الحالي: Unknown. "
+                    "إشارة API غير موثوقة؛ اعرض تاريخ الاسم لمراجعة الدليل الأصلي."
+                )
         if selected:
             for index, row in enumerate(self.rows):
                 if row["username_key"] == selected["username_key"]:

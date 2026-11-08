@@ -295,7 +295,7 @@ def test_direct_x_transport_still_disables_environment_proxies(monkeypatch, rout
 
     monkeypatch.setattr(protocol.urllib.request, "build_opener", opener)
     result = protocol.fetch("fresh_name", 15, connection=route)
-    assert protocol.parse(result, "fresh_name")[0] == "Available"
+    assert protocol.parse(result, "fresh_name")[0] == "Taken"
     assert calls == [(protocol.ENDPOINT + "?username=fresh_name", "GET", 15)]
 
 

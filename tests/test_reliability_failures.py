@@ -71,7 +71,7 @@ def test_error_after_committed_response_keeps_original_evidence(rigs, platform):
     with pytest.raises(RuntimeError):
         execute(rig, updated=updated)
     assert len(rig.calls) == 1
-    assert rig.repo.results()[0][0]["classification"] == "Available"
+    assert rig.repo.results()[0][0]["classification"] == ("Available" if platform == "Roblox" else "Taken")
     assert len(rig.repo.history("NightOne")) == 1
     assert rig.night.get(rig.identity)["state"] == "Review"
 
@@ -85,7 +85,7 @@ def test_failure_during_pacing_never_reissues_previous_result(rigs, platform):
 
     execute(rig, wait=broken_wait)
     assert len(rig.calls) == 1 and rig.repo.results()[1] == 1
-    assert rig.repo.results()[0][0]["classification"] == "Available"
+    assert rig.repo.results()[0][0]["classification"] == ("Available" if platform == "Roblox" else "Taken")
     assert rig.night.get(rig.identity)["state"] == "Review"
 
 

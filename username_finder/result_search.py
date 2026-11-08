@@ -104,7 +104,7 @@ def register_functions(db):
         db.create_function(name, 1, lambda value, i=index: traits(value)[i], deterministic=True)
 
 
-def predicate(filters):
+def predicate(filters, *, x_assessment=False):
     """One predicate shared by count, page and streamed export; all values are parameters."""
     f = filters.validate()
     clauses, args = [], []
@@ -114,7 +114,8 @@ def predicate(filters):
         args.extend(values)
 
     if f.classification:
-        add("c.classification=?", f.classification)
+        column = x.CLASSIFICATION_SQL if x_assessment else "c.classification"
+        add(f"({column})=?", f.classification)
     if f.text:
         text = f.text.casefold()
         match f.text_mode:
@@ -159,7 +160,7 @@ def predicate(filters):
     elif f.symbol_mode in ("contains", "excludes"):
         add("instr(c.username,?)" + (">0" if f.symbol_mode == "contains" else "=0"), f.symbol)
     if f.changed:
-        add("c.changed=1")
+        add(f"({x.CHANGED_SQL})=1" if x_assessment else "c.changed=1")
     return " AND ".join(clauses) or "1", args
 
 
@@ -167,9 +168,9 @@ def query_parts(scope, filters, history=False):
     platforms = tuple(SYMBOL_RULES) if scope == "All" else (scope,)
     if any(platform not in SYMBOL_RULES for platform in platforms):
         raise ValueError("منصة نتائج غير مدعومة.")
-    where, values = predicate(filters)
     parts, args = [], []
     for platform in platforms:
+        where, values = predicate(filters, x_assessment=platform == "X")
         prefix = "roblox" if platform == "Roblox" else "x"
         base = (
             f"{prefix}_checks c LEFT JOIN {prefix}_names n ON n.username_key=c.username_key"
@@ -177,9 +178,21 @@ def query_parts(scope, filters, history=False):
             else f"{prefix}_names n JOIN {prefix}_checks c ON c.id=n.latest_id"
         )
         extra = "c.api_code,c.source" if platform == "Roblox" else "NULL AS api_code,'X API' AS source"
+        classification = x.CLASSIFICATION_SQL if platform == "X" else "c.classification"
+        previous = x.PREVIOUS_SQL if platform == "X" else "c.previous_classification"
+        changed = x.CHANGED_SQL if platform == "X" else "c.changed"
+        assessment = (
+            f"CASE WHEN c.classification='Available' THEN '{x.REASSESSMENT_REASON}' ELSE '' END"
+            if platform == "X"
+            else "''"
+        )
         parts.append(
-            f"SELECT '{platform}' AS platform,c.id,c.username,c.username_key,c.checked_at,c.classification,"
-            f"c.evidence,c.previous_classification,c.changed,n.completed_checks,{extra} "
+            f"SELECT '{platform}' AS platform,c.id,c.username,c.username_key,c.checked_at,"
+            f"({classification}) AS classification,c.evidence,({previous}) AS previous_classification,"
+            f"({changed}) AS changed,n.completed_checks,{extra},"
+            "c.classification AS recorded_classification,"
+            "c.previous_classification AS recorded_previous_classification,c.changed AS recorded_changed,"
+            f"({assessment}) AS assessment_reason "
             f"FROM {base} WHERE {where}"
         )
         args.extend(values)
@@ -287,6 +300,11 @@ def export_fields(scope):
         "previous_classification",
         "changed",
         "completed_checks",
+        "recorded_classification",
+        "recorded_previous_classification",
+        "recorded_changed",
+        "assessment_reason",
+        "assessment_policy",
         "api_reason",
         "preliminary",
         "independently_verified",
@@ -314,5 +332,6 @@ def export_values(row, fields):
         preliminary=True,
         independently_verified=False,
         warning=x.WARNING if row["platform"] == "X" else "نتيجة Roblox أولية؛ لا تضمن التسجيل.",
+        assessment_policy=x.ASSESSMENT_POLICY if row["platform"] == "X" else "",
     )
     return {field: row.get(field, "") for field in fields}

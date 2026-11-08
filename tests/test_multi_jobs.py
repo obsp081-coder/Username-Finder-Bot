@@ -116,7 +116,7 @@ def test_manager_independent_progress_and_stop_actions(concurrent_window, qtbot)
     events["x"].set()
     qtbot.waitUntil(lambda: not window.x_panel.busy)
     manager.refresh()
-    assert manager.selected()["done"] == 2 and manager.selected()["classifications"] == {"Available": 2}
+    assert manager.selected()["done"] == 2 and manager.selected()["classifications"] == {"Taken": 2}
     assert not manager.start_button.isEnabled() and not manager.stop_button.isEnabled()
     select(manager, "Roblox", ids["roblox"])
     manager.start_button.click()

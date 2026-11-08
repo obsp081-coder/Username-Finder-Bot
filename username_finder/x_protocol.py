@@ -1,8 +1,8 @@
 """X parser/direct transport reference from experiments/x-username-poc/x_poc.py.
 
-Kept independent of research files. Parser parity remains pinned to the preserved PoC.
+Kept independent of research files. Negative/error parsing remains pinned to the preserved PoC.
 Explicit fixed proxy transport is delegated to x_connection without changing classification.
-API availability is preliminary; the hzwu9 false-positive remains unresolved.
+Positive API indications cannot establish claimability and are conservatively Unknown.
 """
 
 from __future__ import annotations
@@ -217,7 +217,7 @@ def parse(response, username):
             if re.search(r"taken|not available|unavailable|invalid|reserved", message, re.I):
                 return "Unknown", "contradictory_message", parsed
             if validate_syntax(username)["valid"]:
-                return "Available", "historical_pair_available_unverified_current_semantics", parsed
+                return "Unknown", "api_available_does_not_establish_claimability", parsed
             reason = "available_conflicts_with_documented_local_syntax"
         elif pair == (False, "taken"):
             if positive_availability(message) or re.search(r"\breserved\b|\binvalid\b", message, re.I):

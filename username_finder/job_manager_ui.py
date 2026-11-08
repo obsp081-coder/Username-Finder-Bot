@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import x
 from .overnight import STATES as OVERNIGHT_STATES
 from .platform_workspace import ReadableColumns
 from .roblox_ui import STATES as ROBLOX_STATES
@@ -192,9 +193,10 @@ class JobManagerPanel(QWidget):
                 if not identities:
                     continue
                 placeholders = ",".join("?" for _ in identities)
+                classification_sql = x.CLASSIFICATION_SQL if platform == "X" else "c.classification"
                 for identity, classification, count in store.db.execute(
-                    f"SELECT run_id,classification,COUNT(*) FROM {prefix}_checks "
-                    f"WHERE run_id IN ({placeholders}) GROUP BY run_id,classification",
+                    f"SELECT run_id,({classification_sql}),COUNT(*) FROM {prefix}_checks c "
+                    f"WHERE run_id IN ({placeholders}) GROUP BY run_id,({classification_sql})",
                     identities,
                 ):
                     classifications.setdefault((platform, identity), {})[classification] = count

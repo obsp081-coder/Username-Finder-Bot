@@ -18,16 +18,47 @@ from .roblox import input_values  # Platform-independent UTF-8 TXT/CSV reader.
 INTERVALS = (30.0, 15.0, 10.0, 5.0, 4.0, 3.0, 2.0, 1.5, 1.0, 0.5, 0.0)
 WARNING = (
     "\u2066X\u2069 تجريبي • نقطة التحقق غير رسمية.\n"
-    "\u2066Available\u2069 إشارة أولية لا تضمن التسجيل؛ قد تختلف واجهة تغيير الاسم.\n"
-    "تعارض \u2066hzwu9\u2069 لم يُحل. طول 15 مقبول محليًا مع اختلاف التوثيق؛ صحة الصيغة لا تثبت الإتاحة."
+    "إشارات available الحالية والقديمة تُقيَّم Unknown؛ لا تثبت قابلية تسجيل الاسم.\n"
+    "أُبلغ عن إيجابيات كاذبة، منها hzwu9؛ السبب غير محسوم. التصنيفات الأصلية والأدلة محفوظة."
 )
 LABELS = {
-    "Available": "متاح أوليًا — غير مؤكد (Available)",
+    "Available": "إتاحة غير مثبتة (Available)",
     "Taken": "مستخدم أوليًا (Taken)",
     "Reserved": "مرفوض من المنصة (Reserved)",
     "Invalid": "صيغة غير صالحة (Invalid)",
     "Unknown": "غير محسوم (Unknown)",
 }
+
+ASSESSMENT_POLICY = "x-claimability-unverified-v1"
+REASSESSMENT_REASON = "historical_api_available_does_not_establish_claimability"
+# These trusted SQL expressions use the common observation alias, never user input.
+CLASSIFICATION_SQL = "CASE WHEN c.classification='Available' THEN 'Unknown' ELSE c.classification END"
+PREVIOUS_SQL = (
+    "CASE WHEN c.previous_classification='Available' THEN 'Unknown' ELSE c.previous_classification END"
+)
+CHANGED_SQL = (
+    f"CASE WHEN ({PREVIOUS_SQL}) IS NOT NULL AND ({PREVIOUS_SQL})<>({CLASSIFICATION_SQL}) THEN 1 ELSE 0 END"
+)
+
+
+def assess_observation(row):
+    """Reassess only returned copies; the persisted observation and evidence stay untouched."""
+    result = dict(row)
+    result.update(
+        recorded_classification=row["classification"],
+        recorded_previous_classification=row["previous_classification"],
+        recorded_changed=row["changed"],
+        assessment_reason=REASSESSMENT_REASON if row["classification"] == "Available" else "",
+        classification="Unknown" if row["classification"] == "Available" else row["classification"],
+        previous_classification=(
+            "Unknown" if row["previous_classification"] == "Available" else row["previous_classification"]
+        ),
+    )
+    result["changed"] = int(
+        result["previous_classification"] is not None
+        and result["previous_classification"] != result["classification"]
+    )
+    return result
 
 
 def now():

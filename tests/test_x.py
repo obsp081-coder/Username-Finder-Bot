@@ -19,7 +19,8 @@ from username_finder.x_runner import XRunner
 from username_finder.x_storage import XStore
 
 
-def response(valid=True, reason="available", **fields):
+def response(valid=False, reason="taken", **fields):
+    # Ordinary workload fixtures use a supported negative, not disputed availability.
     return protocol.Response(
         200,
         json.dumps(dict(valid=valid, reason=reason, **fields)).encode(),
@@ -78,7 +79,7 @@ def test_protocol_is_independent_snapshot_and_matches_all_historical_evidence():
     tree = ast.parse(source.read_text(encoding="utf-8"))
     integrated = ast.parse(Path(protocol.__file__).read_text(encoding="utf-8"))
     for node in integrated.body:
-        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name != "fetch":
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name not in ("fetch", "parse"):
             original = next(n for n in tree.body if isinstance(n, type(node)) and n.name == node.name)
             assert ast.dump(node, include_attributes=False) == ast.dump(original, include_attributes=False)
     # Immutable CSV is read only; no research DB is opened for writing or exported.
@@ -87,7 +88,13 @@ def test_protocol_is_independent_snapshot_and_matches_all_historical_evidence():
             sample = protocol.Response(
                 int(row["http_status"]), row["raw_response_redacted"].encode(), json.loads(row["headers"])
             )
-            assert protocol.parse(sample, row["username"]) == reference.parse(sample, row["username"])
+            current = protocol.parse(sample, row["username"])
+            original = reference.parse(sample, row["username"])
+            if original[0] == "Available":
+                assert current[:2] == ("Unknown", "api_available_does_not_establish_claimability")
+                assert current[2] == original[2]
+            else:
+                assert current == original
 
 
 @pytest.mark.parametrize("length,valid", [(4, False), (5, True), (14, True), (15, True), (16, False)])
@@ -116,7 +123,7 @@ def test_syntax_characters_not_availability(name, valid):
 @pytest.mark.parametrize(
     "reason,name,expected,fields",
     [
-        ("available", "valid_name", "Available", {}),
+        ("available", "valid_name", "Unknown", {}),
         ("taken", "valid_name", "Taken", {}),
         ("is_banned_word", "admin", "Reserved", {}),
         ("contains_banned_word", "xadmin", "Reserved", {}),
@@ -145,9 +152,9 @@ def test_classifications(reason, name, expected, fields):
 
 
 def test_hzwu9_is_not_hardcoded_or_claimed_verified():
-    original = response(msg="Available!", desc="Available!")
+    original = response(True, "available", msg="Available!", desc="Available!")
     result = x.result_for("hzwu9", original)
-    assert result["classification"] == "Available"
+    assert result["classification"] == "Unknown"
     assert result["response_data"] == original.body.decode()
     assert result["preliminary"] and not result["independently_verified"]
     assert "hzwu9" in result["warning"]
@@ -199,27 +206,27 @@ def test_platform_isolation_persistence_and_no_roblox_migration(repo):
     roblox.end(identity, "Completed")
     before = [tuple(r) for r in repo.store.db.execute("SELECT * FROM roblox_checks")]
     run(repo, x.input_spec("valid_name"))
-    assert repo.results()[0][0]["classification"] == "Available"
+    assert repo.results()[0][0]["classification"] == "Taken"
     assert roblox.results()[0][0]["classification"] == "Taken"
     assert [tuple(r) for r in repo.store.db.execute("SELECT * FROM roblox_checks")] == before
     path = repo.store.path
     repo.store.close()
     reopened = Store(path)
     repo.store = reopened
-    assert XStore(reopened).history("VALID_NAME")[0]["classification"] == "Available"
+    assert XStore(reopened).history("VALID_NAME")[0]["classification"] == "Taken"
     assert RobloxStore(reopened).history("valid_name")[0]["classification"] == "Taken"
 
 
 def test_selected_all_rechecks_changes_filter_and_exports(repo, tmp_path):
     run(repo, x.input_spec("valid_name\nfreshname"))
     identity = repo.prepare(x.input_spec("valid_name\nVALID_NAME"), skip=False)
-    run(repo, identity=identity, fetcher=lambda *a: response(False, "taken"))
-    rows, total = repo.results("Taken", "valid")
+    run(repo, identity=identity, fetcher=lambda *a: response(False, "is_banned_word"))
+    rows, total = repo.results("Reserved", "valid")
     assert total == 1 and rows[0]["changed"] == 1
-    assert rows[0]["previous_classification"] == "Available"
+    assert rows[0]["previous_classification"] == "Taken"
     assert len(repo.history("valid_name")) == 2
     path = tmp_path / "results.csv"
-    assert repo.export(path, "Available") == 1
+    assert repo.export(path, "Taken") == 1
     with path.open(encoding="utf-8-sig", newline="") as stream:
         row = next(csv.DictReader(stream))
     assert row["preliminary"] == "True" and row["independently_verified"] == "False"

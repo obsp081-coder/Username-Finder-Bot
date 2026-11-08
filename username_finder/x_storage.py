@@ -413,7 +413,7 @@ class XStore:
             if history
             else " FROM x_names n JOIN x_checks c ON c.id=n.latest_id"
         )
-        base += " WHERE (?='' OR c.classification=?) AND instr(lower(c.username),lower(?))>0"
+        base += f" WHERE (?='' OR ({x.CLASSIFICATION_SQL})=?) AND instr(lower(c.username),lower(?))>0"
         args = (classification, classification, search)
         with self.store.lock:
             total = self.store.db.execute("SELECT COUNT(*)" + base, args).fetchone()[0]
@@ -421,12 +421,12 @@ class XStore:
             if limit is not None:
                 query += " LIMIT ? OFFSET ?"
                 args += (limit, offset)
-            return [dict(r) for r in self.store.db.execute(query, args)], total
+            return [x.assess_observation(r) for r in self.store.db.execute(query, args)], total
 
     def history(self, username):
         with self.store.lock:
             return [
-                dict(r)
+                x.assess_observation(r)
                 for r in self.store.db.execute(
                     "SELECT * FROM x_checks WHERE username_key=? ORDER BY id DESC", (username.casefold(),)
                 )
@@ -436,8 +436,9 @@ class XStore:
         with self.store.lock:
             return dict(
                 self.store.db.execute(
-                    "SELECT c.classification,COUNT(*) FROM x_names n JOIN x_checks c ON c.id=n.latest_id "
-                    "GROUP BY c.classification"
+                    f"SELECT {x.CLASSIFICATION_SQL},COUNT(*) FROM x_names n "
+                    "JOIN x_checks c ON c.id=n.latest_id "
+                    f"GROUP BY {x.CLASSIFICATION_SQL}"
                 ).fetchall()
             )
 
@@ -454,6 +455,11 @@ class XStore:
             "previous_classification",
             "changed",
             "completed_checks",
+            "recorded_classification",
+            "recorded_previous_classification",
+            "recorded_changed",
+            "assessment_reason",
+            "assessment_policy",
             "api_reason",
             "preliminary",
             "independently_verified",
@@ -478,6 +484,7 @@ class XStore:
                             preliminary=True,
                             independently_verified=False,
                             warning=x.WARNING,
+                            assessment_policy=x.ASSESSMENT_POLICY,
                         )
                         writer.writerow({key: values.get(key, "") for key in fields})
                     count += len(rows)

@@ -223,10 +223,7 @@ def test_combined_filters_and_sql_parameter_safety(dataset):
         symbol="_",
         classification="Taken",
     ) == {"abc_de", "_abcd"}
-    assert names(search, text="ab", repetition="none", classification="Available") == {
-        "ab12",
-        "abc12",
-    }
+    assert names(search, text="ab", repetition="none", classification="Available") == {"ab12"}
     assert names(
         search,
         "Roblox",
