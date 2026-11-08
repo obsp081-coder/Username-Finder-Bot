@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from . import roblox_protocol as protocol
 from .overnight import OvernightStore, transport_failure
 from .roblox import result_for, retry_not_before
+from .roblox_activity import RobloxActivity
 
 
 class RobloxRunner:
@@ -23,6 +24,11 @@ class RobloxRunner:
         self.night = OvernightStore(repository.store, "Roblox")
 
     def run(self, run_id, *, automatic=False):
+        # This guard also covers overnight and scheduled entry points.
+        with RobloxActivity(self.repository.store.path):
+            return self._run(run_id, automatic=automatic)
+
+    def _run(self, run_id, *, automatic=False):
         repo = self.repository
         started = False
         transport = None

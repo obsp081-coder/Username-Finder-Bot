@@ -39,6 +39,7 @@ from .platform_workspace import PlatformWorkspace, ReadableColumns, generation_f
 from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
+from .roblox_bulk_ui import BulkPanel
 from .roblox_runner import RobloxRunner
 from .roblox_storage import CHECK_INTERVALS, RobloxStore
 from .ui_helpers import local_time, style_combo_popup
@@ -74,6 +75,14 @@ class RobloxPanel(QScrollArea):
     completed = Signal(object, object, str)
     progress_changed = Signal()
     preparation_progress = Signal(object)
+
+    @property
+    def busy(self):
+        return self._busy or (hasattr(self, "bulk") and self.bulk.busy)
+
+    @busy.setter
+    def busy(self, value):
+        self._busy = value
 
     def __init__(self, store, make_table, fill_table, *, fetcher=None):
         super().__init__()
@@ -210,7 +219,9 @@ class RobloxPanel(QScrollArea):
             (self.preview_button, self.start_button, self.stop_button, self.resume_button)
         ):
             actions.addWidget(widget, i // 2, i % 2)
-        root_layout.addLayout(actions)
+        self.individual_actions = QWidget()
+        self.individual_actions.setLayout(actions)
+        root_layout.addWidget(self.individual_actions)
         self.status = QLabel("جاهز — لا توجد طلبات تلقائية.")
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.PlainText)
@@ -285,6 +296,15 @@ class RobloxPanel(QScrollArea):
         layout.addWidget(self.export_history)
         layout.addWidget(self.export_button)
         self.setWidget(content)
+        self.checking_mode = QComboBox()
+        self.checking_mode.addItems(["الفحص الفردي (الدقيق)", "البحث الجماعي عن الحسابات Bulk (تجريبي)"])
+        style_combo_popup(self.checking_mode)
+        root_layout.insertWidget(3, self.checking_mode)
+        self.bulk = BulkPanel(self)
+        self.bulk.idle.connect(self.idle.emit)
+        root_layout.addWidget(self.bulk)
+        self.bulk.hide()
+        self.checking_mode.currentIndexChanged.connect(self.change_checking_mode)
         for signal in (
             self.class_filter.currentIndexChanged,
             self.search.textChanged,
@@ -292,6 +312,11 @@ class RobloxPanel(QScrollArea):
         ):
             signal.connect(self.advanced_filters.update_filters)
         self.refresh()
+
+    def change_checking_mode(self, index):
+        self.workspace.setVisible(index == 0)
+        self.individual_actions.setVisible(index == 0)
+        self.bulk.setVisible(index == 1)
 
     @staticmethod
     def _button(label, callback):
@@ -346,6 +371,7 @@ class RobloxPanel(QScrollArea):
             self.idle.emit()
 
     def controls(self):
+        self.checking_mode.setEnabled(not self.busy and not self.closing)
         for widget in (
             self.modes,
             self.speed,
@@ -501,6 +527,9 @@ class RobloxPanel(QScrollArea):
         )
 
     def stop(self, *, manual=True):
+        if self.bulk.busy:
+            self.bulk.stop()
+            return
         self.stopping = self.busy
         self.preparation_cancel.set()
         if self.runner:
@@ -820,6 +849,7 @@ class RobloxPanel(QScrollArea):
             )
 
     def shutdown(self):
+        self.bulk.shutdown()
         self.result_query.shutdown()
         self.closing = True
         self.refresh_timer.stop()
