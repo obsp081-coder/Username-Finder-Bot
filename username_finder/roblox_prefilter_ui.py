@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -26,8 +27,10 @@ from PySide6.QtWidgets import (
 )
 
 from .roblox_activity import RobloxActivity
-from .roblox_prefilter import Prefilter
+from .roblox_bulk import write_new
+from .roblox_prefilter import MAX_CONFIGURED_BATCH, VERIFIED_OPERATIONAL_BATCH, Prefilter
 from .roblox_prefilter_estimates import calculate, duration_text
+from .roblox_prefilter_review import inspect_operation, record_review
 from .ui_cards import Card, CardGrid, Disclosure, icon
 
 STATE_LABELS = {
@@ -114,7 +117,7 @@ class PrefilterPanel(QWidget):
         self.delay.setRange(0.001, 86400)
         self.delay.setValue(10)
         self.batch = QSpinBox()
-        self.batch.setRange(1, 20)
+        self.batch.setRange(1, MAX_CONFIGURED_BATCH)
         self.batch.setValue(20)
         self.pilot_size = QSpinBox()
         self.pilot_size.setRange(1, 200)
@@ -132,6 +135,31 @@ class PrefilterPanel(QWidget):
         self.delay.valueChanged.connect(lambda v: self.warning.setVisible(v < 10))
         self.warning.hide()
         self.steps["config"].addWidget(self.warning)
+        self.batch_warning = QLabel(
+            "أكبر من20 تجريبي للتحضير والتقدير فقط؛ الإرسال محظور حتى إثبات دعم Roblox."
+        )
+        self.batch_warning.setObjectName("simulation")
+        self.batch_warning.setWordWrap(True)
+        self.batch_warning.hide()
+        self.steps["config"].addWidget(self.batch_warning)
+        rates = QGridLayout()
+        rates.setHorizontalSpacing(12)
+        self.rate_values = {}
+        for column, (key, unit) in enumerate(
+            (("second", "اسم/ثانية"), ("minute", "اسم/دقيقة"), ("hour", "اسم/ساعة"))
+        ):
+            value = QLabel()
+            value.setObjectName("heading")
+            value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            unit_label = QLabel(unit + " — نظريًا")
+            unit_label.setObjectName("micro")
+            unit_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            rates.addWidget(value, 0, column)
+            rates.addWidget(unit_label, 1, column)
+            rates.setColumnStretch(column, 1)
+            self.rate_values[key] = value
+        self.steps["config"].addLayout(rates)
         self.estimates = QLabel()
         self.estimate_note = QLabel()
         self.estimate_note.setObjectName("micro")
@@ -150,6 +178,9 @@ class PrefilterPanel(QWidget):
             ("open", "فتح عملية محفوظة…", self.open_run),
             ("prepare", "استيراد ومعاينة محلية", self.prepare),
             ("inspect", "مراجعة الحالة والدليل", self.inspect),
+            ("restriction", "مراجعة القيد والتوافق — دون اتصال", self.review_restriction),
+            ("acknowledge", "تسجيل مراجعة الدليل — لا يرفع القيد", self.acknowledge_restriction),
+            ("export_review", "تصدير تقرير القيد والتوافق…", self.export_review),
             ("pilot", "تفويض / استئناف التجربة المحدودة", lambda: self.start("pilot")),
             ("full", "تفويض / استئناف الباقي", lambda: self.start("full")),
             ("stop", "إيقاف وحفظ التقدم", self.stop),
@@ -170,6 +201,9 @@ class PrefilterPanel(QWidget):
                 "prepare": "prepare",
                 "pilot": "pilot",
                 "inspect": "review",
+                "restriction": "review",
+                "acknowledge": "review",
+                "export_review": "review",
                 "recover": "review",
                 "review": "review",
                 "full": "full",
@@ -192,7 +226,19 @@ class PrefilterPanel(QWidget):
         self.counts.setWordWrap(True)
         self.counts.setTextFormat(Qt.TextFormat.PlainText)
         self.steps["review"].addWidget(self.counts)
-        for label in (explanation, self.status, self.counts, self.warning, self.restriction_notice):
+        self.review_details = QLabel("افتح عملية محفوظة لمراجعة القيد وتوافقها، دون إرسال طلبات.")
+        self.review_details.setWordWrap(True)
+        self.review_details.setTextFormat(Qt.TextFormat.PlainText)
+        self.steps["review"].addWidget(self.review_details)
+        for label in (
+            explanation,
+            self.status,
+            self.counts,
+            self.warning,
+            self.restriction_notice,
+            self.batch_warning,
+            self.review_details,
+        ):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setMinimumWidth(0)
         self.progress_changed.connect(self.show_progress)
@@ -211,19 +257,30 @@ class PrefilterPanel(QWidget):
             )
         except (ValueError, TypeError, KeyError, OverflowError):
             self.calculation = None
+            for label in self.rate_values.values():
+                label.setText("—")
             self.estimates.setText("التقدير غير متاح؛ راجع الإعدادات وبيانات التوقيت.")
             self.estimate_note.clear()
             return
         self.calculation = model
+        self.batch_warning.setVisible(not model["batch_supported"])
+        for key, label in self.rate_values.items():
+            label.setText(f"{model['names_per_' + key]:,.2f}")
         remaining = model["remaining_requests"]
         remaining_text = f"{remaining:,}" if remaining is not None else "غير معلوم قبل الاستيراد"
         observed = model["observed_names_per_minute"]
         observed_text = f"{observed:,.2f} اسم/دقيقة" if observed is not None else "غير متاح بتوقيت موثوق"
+        remaining_line = (
+            f"طلبات الباقي: {remaining_text} • المدة: {duration_text(model['remaining_seconds'])}"
+            if remaining is not None
+            else "طلبات الباقي ومدته: تتحدد بعد اكتمال الاستيراد."
+        )
         self.estimates.setText(
-            f"نظريًا: {model['names_per_minute']:,.2f} اسم/دقيقة • {model['names_per_hour']:,.2f} اسم/ساعة\n"
-            f"طلبات الباقي: {remaining_text} • مدته النظرية: {duration_text(model['remaining_seconds'])}\n"
+            f"التقدير النظري • دفعة {model['config']['batch_size']:,} • فاصل {model['config']['delay']:g}ث\n"
+            + remaining_line
+            + "\n"
             f"التجربة المتبقية: {model['pilot_requests']:,} طلبًا • {duration_text(model['pilot_seconds'])}\n"
-            f"مرصود لكل الأسماء المعالجة، بما فيها المجهول: {observed_text}"
+            f"مرصود (يشمل المجهول): {observed_text}"
         )
         measured = model["latency_source"] == "measured_safe_responses"
         source = (
@@ -233,13 +290,17 @@ class PrefilterPanel(QWidget):
         )
         scope = "" if model["scope_complete"] else " عدد الملف غير مكتمل حتى ينتهي الاستيراد."
         blocked = (
-            " التشغيل محظور؛ الأرقام افتراضية فقط." if model["restricted"] or model["review_required"] else ""
+            " التشغيل محظور؛ الأرقام افتراضية فقط."
+            if model["restricted"] or model["review_required"] or not model["batch_supported"]
+            else ""
         )
-        self.estimate_note.setText(
-            source + scope + blocked + " يشمل الرد والفاصل المتسلسل والدفعات الجزئية عند حدود الأطوار؛ "
-            "لا يشمل الاستيراد والتصدير ومعالجة القرص ومراجعة المستخدم أو قيودًا لاحقة. "
-            "عند فتح عملية تُستخدم إعداداتها المحفوظة، وهذه تقديرات عند آخر تحديث وليست ضمانًا."
+        details = (
+            "يشمل الرد والفاصل والدفعات الجزئية؛ يستثني الاستيراد والتصدير والقرص "
+            "ومراجعة المستخدم والقيود اللاحقة. إعدادات العملية المحفوظة ثابتة. التقدير ليس ضمانًا."
         )
+        self.estimate_note.setText(source + scope + blocked)
+        self.estimate_note.setToolTip(details)
+        self.estimates.setToolTip(details)
 
     def controls(self):
         marker = RobloxActivity(self.owner.repo.store.path).block
@@ -278,6 +339,8 @@ class PrefilterPanel(QWidget):
                 state = self.snapshot["phases"].get(phase, {}).get("state", "Ready")
                 eligible &= state in ("Ready", "Paused") and self.snapshot["unprocessed"] > 0
                 eligible &= not (self.shared_restriction or self.snapshot.get("provider_blocked", False))
+                eligible &= self.snapshot["manifest"]["settings"]["batch_size"] <= VERIFIED_OPERATIONAL_BATCH
+                eligible &= self.snapshot.get("timing_policy_current", False)
                 self.buttons[phase].setEnabled(bool(eligible and not self.busy and not self.closing))
         self.refresh_estimates()
 
@@ -318,9 +381,13 @@ class PrefilterPanel(QWidget):
             self.status.setText(error)
         elif isinstance(result, Path):
             self.status.setText(
-                "مجلد التصدير: "
+                ("ملف التقرير: " if result.is_file() else "مجلد التصدير: ")
                 + str(result)
-                + " — افحص export-state.json لاكتماله؛ مرشحو الفردي في individual-candidates.txt"
+                + (
+                    " — مراجعة محلية، دون إذن اتصال أو رفع قيد."
+                    if result.is_file()
+                    else " — افحص export-state.json لاكتماله؛ مرشحو الفردي في individual-candidates.txt"
+                )
             )
         if self.closing:
             self.executor.shutdown(wait=False)
@@ -334,6 +401,8 @@ class PrefilterPanel(QWidget):
         elapsed = sum(p["elapsed_seconds"] for p in phases.values())
         time_note = "حد أدنى " if any(p.get("elapsed_incomplete") for p in phases.values()) else ""
         rate = data["quality"]["full" if "full" in phases else "pilot"]["names_per_minute"]
+        if not data.get("timing_policy_current"):
+            rate = None
         rate_note = f"{rate:.2f} اسم/دقيقة" if rate is not None else "غير محسوم"
         safe = sum(q["safe_responses"] for q in data["quality"].values())
         last = data.get("last_request") or {}
@@ -341,6 +410,21 @@ class PrefilterPanel(QWidget):
         restricted = bool(data.get("provider_blocked")) or any(
             p["state"] == "Restricted" for p in phases.values()
         )
+        review = data.get("restriction_review")
+        if review:
+            evidence = review["last_response_evidence"] or {}
+            headers = evidence.get("headers", {})
+            self.review_details.setText(
+                f"القيد المحفوظ: {review['shared_restriction_reason'] or 'راجع حالة الأطوار'}\n"
+                f"آخر رد: HTTP {evidence.get('status', '—')} • {evidence.get('response_at', '—')}\n"
+                f"Retry-After: {headers.get('retry-after', 'غير موجود')} • "
+                f"إعادة ضبط الحصة: {headers.get('x-ratelimit-reset', 'غير موجود')}\n"
+                f"توافق بصمة المصدر: {'مطابقة' if review['policy_matches'] else 'غير مثبت؛ استئناف محظور'}\n"
+                + review["explanation_ar"]
+            )
+            self.review_details.setToolTip(json.dumps(review, ensure_ascii=False, indent=2))
+        else:
+            self.review_details.setText("استخدم مراجعة القيد والتوافق لعرض الدليل والترويسات دون اتصال.")
         self.restriction_notice.setVisible(restricted or bool(stops))
         self.restriction_notice.setText(
             "توقف وقائي محفوظ: "
@@ -420,7 +504,7 @@ class PrefilterPanel(QWidget):
                 self.delay.setValue(value["settings"]["delay"])
                 self.batch.setValue(value["settings"]["batch_size"])
                 self.pilot_size.setValue(value["settings"]["pilot_names"])
-                self.submit(self.service.recover)
+                self.submit(lambda: inspect_operation(self.service))
             except Exception as exc:
                 self.status.setText(str(exc))
 
@@ -458,6 +542,28 @@ class PrefilterPanel(QWidget):
     def recover(self):
         if self.service:
             self.submit(self.service.recover)
+
+    def review_restriction(self):
+        if self.service:
+            self.submit(lambda: inspect_operation(self.service))
+
+    def acknowledge_restriction(self):
+        if self.service and self.confirm(
+            "سيسجل إقرار محلي بمراجعة الدليل فقط. لا يرفع الحظر أو يجيز اتصالًا أو يغير النتائج. هل تؤكد؟"
+        ):
+            self.submit(lambda: record_review(self.service, self.service.manifest()["fingerprint"]))
+
+    def export_review(self):
+        if not self.service:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "تقرير جديد للقيد والتوافق", "", "JSON (*.json)")
+        if path:
+
+            def work():
+                write_new(Path(path), inspect_operation(self.service))
+                return Path(path)
+
+            self.submit(work)
 
     def review_uncertain(self):
         if self.service and self.confirm(

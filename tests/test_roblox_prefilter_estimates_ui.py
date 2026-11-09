@@ -16,7 +16,7 @@ def test_fields_refresh_cached_estimates_without_database_or_file_work(window, m
     ui = window.roblox.prefilter
     window.tabs.setCurrentWidget(window.roblox)
     window.roblox.checking_mode.setCurrentIndex(2)
-    assert ui.batch.maximum() == 20
+    assert ui.batch.maximum() == 1000
     assert ui.calculation["latency_source"] == "illustrative_assumption"
     assert "افتراض" in ui.estimate_note.text()
     assert ui.calculation["pilot_requests"] == 5

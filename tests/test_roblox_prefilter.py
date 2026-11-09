@@ -55,7 +55,7 @@ def test_bad_delays(value):
         settings(delay=value)
 
 
-@pytest.mark.parametrize("size", [0, 21, -1, True, 1.5, "20"])
+@pytest.mark.parametrize("size", [0, 1001, -1, True, 1.5, "20"])
 def test_bad_sizes(size):
     with pytest.raises(ValueError):
         settings(batch_size=size)

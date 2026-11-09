@@ -33,6 +33,8 @@ GROUPS = {
     "invalid": "state='LocalInvalid'",
     "unresolved": "state IN ('Unknown','UnsafeOrContradictoryResponse')",
 }
+MAX_CONFIGURED_BATCH = transport_protocol.MAX_BATCH_SIZE
+VERIFIED_OPERATIONAL_BATCH = 20
 
 
 def settings(delay=10, batch_size=20, pilot_names=100):
@@ -44,8 +46,8 @@ def settings(delay=10, batch_size=20, pilot_names=100):
         or delay > threading.TIMEOUT_MAX
     ):
         raise ValueError("الفاصل يجب أن يكون عددًا موجبًا ومحدودًا؛ الصفر غير مدعوم هنا.")
-    if type(batch_size) is not int or not 1 <= batch_size <= 20:
-        raise ValueError("حجم الدفعة من 1 إلى 20.")
+    if type(batch_size) is not int or not 1 <= batch_size <= MAX_CONFIGURED_BATCH:
+        raise ValueError("حجم الدفعة عدد صحيح من 1 إلى 1000.")
     if type(pilot_names) is not int or not 1 <= pilot_names <= 200:
         raise ValueError("التجربة الأولية من 1 إلى 200 اسم صالح فريد.")
     return {"delay": float(delay), "batch_size": batch_size, "pilot_names": pilot_names}
@@ -114,11 +116,14 @@ class Prefilter:
         self.wait = wait or self.cancel.wait
 
     @contextmanager
-    def connect(self, *, create=False):
+    def connect(self, *, create=False, read_only=False):
         if not create and not self.path.exists():
             raise ValueError("ملف العمل غير موجود.")
-        db = sqlite3.connect(self.path, timeout=5)
+        target = self.path.resolve().as_uri() + "?mode=ro" if read_only else self.path
+        db = sqlite3.connect(target, timeout=5, uri=read_only)
         db.row_factory = sqlite3.Row
+        if read_only:
+            db.execute("PRAGMA query_only=ON")
         db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA cache_size=-4096")
         db.execute("PRAGMA temp_store=FILE")
@@ -315,9 +320,9 @@ class Prefilter:
             self.updated()
         return self.summary()
 
-    def summary(self):
+    def summary(self, *, read_only=False):
         manifest = self.manifest()
-        with self.connect() as db:
+        with self.connect(read_only=True) if read_only else self.connect() as db:
             meta = self.meta(db)
             if meta["fingerprint"] != manifest["fingerprint"]:
                 raise ValueError("Manifest/work mismatch")
@@ -505,6 +510,9 @@ class Prefilter:
         return stop
 
     def recover(self):
+        if self.manifest()["policy"] != policy():
+            # Never reinterpret old pending evidence under a different source policy.
+            return self.summary(read_only=True)
         with RobloxActivity(self.path):
             with self.connect() as db:
                 meta = self.meta(db)
@@ -598,6 +606,10 @@ class Prefilter:
         if phase not in ("pilot", "full"):
             raise ValueError("Unknown phase")
         summary = self.summary()
+        if summary["manifest"]["settings"]["batch_size"] > VERIFIED_OPERATIONAL_BATCH:
+            raise ValueError("حجم أكبر من20 للتقدير والتحضير فقط؛ دعم الموفر غير مثبت والإرسال محظور.")
+        if summary["provider_blocked"]:
+            raise ValueError("قيد Bulk محفوظ؛ راجع الدليل. لا تفويض أو تحرير تلقائي.")
         if summary["import_state"] != "Ready" or not summary["counts"]["valid"]:
             raise ValueError("يلزم اكتمال استيراد صالح محليًا أولًا.")
         if summary["manifest"]["policy"] != policy():

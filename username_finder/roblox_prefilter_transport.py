@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 from . import roblox_protocol as protocol
 from .roblox_bulk_protocol import SAFE_HEADERS, TIMEOUT_SECONDS, encoded
 
+MAX_BATCH_SIZE = 1000
+
 
 class PrefilterTransport:
     """One direct HTTPS request, no redirects/proxies/cookies/auth/replay."""
@@ -45,8 +47,15 @@ class PrefilterTransport:
         }
         body = None
         if request["kind"] == "bulk":
+            names = request["usernames"]
+            if (
+                type(names) is not list
+                or not 1 <= len(names) <= MAX_BATCH_SIZE
+                or any(type(name) is not str or not 3 <= len(name) <= 20 for name in names)
+            ):
+                raise ValueError("Bulk payload must contain 1-1000 bounded usernames")
             headers["Content-Type"] = "application/json"
-            body = encoded({"usernames": request["usernames"], "excludeBannedUsers": False})
+            body = encoded({"usernames": names, "excludeBannedUsers": False})
         response = protocol.Response()
         started = time.monotonic()
         if request["kind"] != "bulk" or target.query:

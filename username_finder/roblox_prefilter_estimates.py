@@ -2,7 +2,7 @@
 
 import math
 
-from .roblox_prefilter import settings
+from .roblox_prefilter import VERIFIED_OPERATIONAL_BATCH, settings
 
 ILLUSTRATIVE_LATENCY_SECONDS = 0.5
 
@@ -78,6 +78,7 @@ def calculate(delay, batch_size, pilot_names, snapshot=None, *, provider_blocked
         "latency_source": "measured_safe_responses" if responses else "illustrative_assumption",
         "latency_samples": responses,
         "names_per_minute": rate,
+        "names_per_second": rate / 60,
         "names_per_hour": rate * 60,
         "pilot_requests": pilot_requests,
         "pilot_seconds": duration(pilot_requests),
@@ -89,6 +90,7 @@ def calculate(delay, batch_size, pilot_names, snapshot=None, *, provider_blocked
         "review_required": any(p.get("state") == "ReviewRequired" for p in phases.values()),
         "scope_complete": bool(snapshot and snapshot.get("import_state") == "Ready"),
         "first_wait_seconds": first_wait,
+        "batch_supported": batch <= VERIFIED_OPERATIONAL_BATCH,
     }
 
 

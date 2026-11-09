@@ -113,7 +113,7 @@ def test_pacing_and_latency_both_determine_the_rate(delay):
 
 @pytest.mark.parametrize(
     "delay,batch,pilot",
-    [(0, 20, 100), (-1, 20, 100), (float("nan"), 20, 100), (1, 21, 100), (1, True, 100), (1, 20, 0)],
+    [(0, 20, 100), (-1, 20, 100), (float("nan"), 20, 100), (1, 1001, 100), (1, True, 100), (1, 20, 0)],
 )
 def test_invalid_inputs_never_produce_an_estimate(delay, batch, pilot):
     with pytest.raises(ValueError):

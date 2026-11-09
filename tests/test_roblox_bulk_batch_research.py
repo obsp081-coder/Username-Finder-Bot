@@ -13,7 +13,7 @@ from username_finder import roblox_bulk_protocol as bulk
 from username_finder import roblox_prefilter as prefilter
 from username_finder import roblox_prefilter_transport as transport
 
-SIZES = (20, 21, 50, 100)
+SIZES = (20, 21, 50, 100, 500, 1000)
 
 
 @pytest.fixture
@@ -27,6 +27,7 @@ def synthetic_limit(monkeypatch):
         return dict(config, batch_size=batch_size)
 
     monkeypatch.setattr(prefilter, "settings", research_settings)
+    monkeypatch.setattr(prefilter, "VERIFIED_OPERATIONAL_BATCH", 1000)
 
 
 @pytest.mark.parametrize("size", SIZES)
@@ -122,31 +123,37 @@ def test_synthetic_large_batch_durability_export_recovery_without_replay(
 ):
     total = size * 2 + 3
     job.test_source.write_text("\n".join(f"User{i:05}" for i in range(total)), encoding="utf8")
-    job.prepare(job.test_source, batch_size=size, pilot_names=size + 1)
+    pilot = min(size + 1, 200)
+    job.prepare(job.test_source, batch_size=size, pilot_names=pilot)
     finish = job._finish
 
     def interrupt(db, request, response, meta):
-        if request["id"] == 2:
+        if request["id"] == (2 if size < 200 else 1):
             raise RuntimeError("Synthetic crash after durable raw")
         return finish(db, request, response, meta)
 
     monkeypatch.setattr(job, "_finish", interrupt)
     execute(job)
-    assert len(job.test_calls) == 2
+    pilot_requests = 2 if size < 200 else 1
+    assert len(job.test_calls) == pilot_requests
     with job.connect() as db:
         raw = [r[0] for r in db.execute("SELECT evidence FROM requests ORDER BY id")]
     monkeypatch.setattr(job, "_finish", finish)
     restored = job.recover()
     assert restored["phases"]["pilot"]["state"] == "Completed"
     assert "full" not in restored["phases"]
-    assert len(job.test_calls) == 2
+    assert len(job.test_calls) == pilot_requests
     result = execute(job, "full")
     assert result["counts"]["excluded"] == total
     sent = [n for _, request in job.test_calls for n in request["usernames"]]
     assert len(sent) == len(set(sent)) == total
-    assert [len(r["usernames"]) for _, r in job.test_calls] == [size, 1, size, 2]
+    expected = [size, 1, size, 2] if size < 200 else [200, size, size - 197]
+    assert [len(r["usernames"]) for _, r in job.test_calls] == expected
     with job.connect() as db:
-        assert [r[0] for r in db.execute("SELECT evidence FROM requests WHERE id<=2 ORDER BY id")] == raw
+        assert [
+            r[0]
+            for r in db.execute("SELECT evidence FROM requests WHERE id<=? ORDER BY id", (pilot_requests,))
+        ] == raw
     out = job.export(tmp_path / "export")
     assert len(json.loads((out / "current.json").read_bytes())) == total
     assert not (out / "individual-candidates.txt").read_text().strip()
@@ -156,7 +163,7 @@ def test_synthetic_large_batch_durability_export_recovery_without_replay(
 @pytest.mark.parametrize("size", SIZES)
 def test_cross_batch_identity_conflict_revokes_exclusions(job, synthetic_limit, size, tmp_path):
     job.test_source.write_text("\n".join(f"User{i:05}" for i in range(2 * size + 3)), encoding="utf8")
-    job.prepare(job.test_source, batch_size=size, pilot_names=2 * size)
+    job.prepare(job.test_source, batch_size=size, pilot_names=min(2 * size, 200))
     calls = []
 
     def fetch(request):
@@ -165,14 +172,21 @@ def test_cross_batch_identity_conflict_revokes_exclusions(job, synthetic_limit, 
 
     job.transport = fetch
     result = execute(job)
-    assert len(calls) == 2 and result["phases"]["pilot"]["state"] == "Restricted"
-    assert result["counts"]["excluded"] == 0 and result["counts"]["unsafe"] == 2 * size
+    if size > 100:
+        result = execute(job, "full")
+    phase = "pilot" if size <= 100 else "full"
+    assert len(calls) == 2 and result["phases"][phase]["state"] == "Restricted"
+    affected = 2 * size if size <= 100 else 200 + size
+    assert result["counts"]["excluded"] == 0
+    assert result["counts"]["unsafe"] == affected
     out = job.export(tmp_path / "conflict-export")
-    assert len(json.loads((out / "unresolved.json").read_bytes())) == 2 * size
+    assert len(json.loads((out / "unresolved.json").read_bytes())) == affected
 
 
-def test_operational_limit_remains_twenty():
+def test_selection_range_and_operational_guard_remain_distinct():
     assert prefilter.settings(batch_size=20)["batch_size"] == 20
-    for value in (21, 50, 100):
-        with pytest.raises(ValueError):
-            prefilter.settings(batch_size=value)
+    assert prefilter.VERIFIED_OPERATIONAL_BATCH == 20
+    for value in (21, 50, 100, 500, 1000):
+        assert prefilter.settings(batch_size=value)["batch_size"] == value
+    with pytest.raises(ValueError):
+        prefilter.settings(batch_size=1001)
