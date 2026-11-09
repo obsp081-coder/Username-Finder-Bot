@@ -308,8 +308,7 @@ def test_live_guard_default_and_historical_manifest_capability_are_preserved(job
     assert not job.test_calls
 
 
-@pytest.mark.parametrize("point", ["raw", "decision", "hold", "consumed", "released"])
-def test_process_death_at_cross_store_checkpoints_recovers_without_dispatch(job, point):
+def crash_at_checkpoint(job, point):
     job.prepare(job.test_source, batch_size=2, pilot_names=5)
     script = """
 import os,socket,sys
@@ -350,6 +349,11 @@ raise AssertionError('Fault did not execute')
         creationflags=subprocess.CREATE_NO_WINDOW,
     )
     assert result.returncode == 77, result.stderr.decode(errors="replace")
+
+
+@pytest.mark.parametrize("point", ["raw", "decision", "hold", "consumed", "released"])
+def test_process_death_at_cross_store_checkpoints_recovers_without_dispatch(job, point):
+    crash_at_checkpoint(job, point)
     before = table_rows(job)["requests"]
     recovered = job.recover()
     assert recovered["counts"]["unknown"] == 2 and recovered["counts"]["attempts"] == 1
@@ -358,6 +362,20 @@ raise AssertionError('Fault did not execute')
     if point in ("consumed", "released"):
         assert recovered["phases"]["pilot"]["state"] == "Paused"
         assert recovered["shared_cooldown"]["state"] == "Released"
+        original = table_rows(job)
+        pending = RobloxActivity(job.database).pending.read_bytes()
+        job.recover()
+        assert table_rows(job) == original and not job.test_calls
+        assert RobloxActivity(job.database).pending.read_bytes() == pending
+        with pytest.raises(ValueError):
+            job.run("pilot", "already-consumed")
+        completed = execute(job)
+        assert completed["phases"]["pilot"]["state"] == "Completed"
+        assert completed["counts"]["unknown"] == 2 and completed["counts"]["excluded"] == 3
+        requests = table_rows(job)["requests"]
+        assert requests[0] == original["requests"][0]
+        names = [name for row in requests for name in json.loads(row[3])]
+        assert len(names) == len(set(names)) == 5
     else:
         assert recovered["phases"]["pilot"]["state"] == "Cooldown"
         assert recovered["shared_cooldown"]["state"] == "Hold"
@@ -484,3 +502,185 @@ def test_owned_pending_sentinel_also_blocks_older_checker_until_authorization_co
     assert activity.pending.read_bytes().splitlines()[-1] == pending
     job.run("pilot", token)
     assert activity.pending.read_bytes().endswith(b"Clear\n")
+
+
+@pytest.fixture
+def released_job(job):
+    crash_at_checkpoint(job, "released")
+    assert RobloxActivity(job.database).pending.read_bytes().splitlines()[-1].startswith(b"Pending:")
+    return job
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "operation",
+        "request",
+        "partial_pending",
+        "crlf_pending",
+        "control_pending",
+        "malformed_pending",
+        "unowned_pending",
+        "restriction",
+        "released_owner",
+        "malformed_shared",
+        "uncertain",
+        "unconsumed",
+        "missing_consumption",
+        "original_authorization",
+        "historical_block",
+    ],
+)
+def test_released_reconciliation_rejects_unrelated_or_unproven_markers(released_job, mismatch):
+    job = released_job
+    guard = RobloxActivity(job.database)
+    if mismatch in (
+        "operation",
+        "request",
+        "partial_pending",
+        "crlf_pending",
+        "control_pending",
+        "malformed_pending",
+        "unowned_pending",
+    ):
+        expected = guard.pending.read_bytes().splitlines()[-1]
+        raw = {
+            "operation": b"Pending:" + b"b" * 64 + b":1\n",
+            "request": b"Pending:" + job.manifest()["fingerprint"].encode() + b":2\n",
+            "partial_pending": expected,
+            "crlf_pending": expected + b"\r\n",
+            "control_pending": b"broken\r" + expected + b"\n",
+            "malformed_pending": expected + b"\nGarbage\n",
+            "unowned_pending": b"Pending\n",
+        }[mismatch]
+        guard.pending.write_bytes(raw)
+    elif mismatch in ("restriction", "released_owner", "malformed_shared"):
+        checkpoint = guard.cooldown_state()
+        if mismatch == "restriction":
+            checkpoint["restriction"] = "b" * 64
+        elif mismatch == "released_owner":
+            checkpoint["owner"] = "b" * 64 + ":" + "c" * 64
+        guard.cooldown.write_bytes(
+            b"broken\n" if mismatch == "malformed_shared" else json.dumps(checkpoint).encode() + b"\n"
+        )
+    elif mismatch == "historical_block":
+        guard.block.write_bytes(b"http_429")
+    else:
+        with job.connect() as db:
+            if mismatch == "uncertain":
+                db.execute("UPDATE requests SET state='Uncertain'")
+            elif mismatch == "missing_consumption":
+                db.execute("DELETE FROM audit WHERE event='cooldown_authorization_consumed'")
+            elif mismatch == "original_authorization":
+                row = db.execute("SELECT id,data FROM audit WHERE event='cooldown_authorization'").fetchone()
+                data = json.loads(row["data"])
+                data["authorization_hash"] = "b" * 64
+                db.execute("UPDATE audit SET data=? WHERE id=?", (json.dumps(data), row["id"]))
+            else:
+                meta = job.meta(db)
+                meta["cooldown"]["stage"] = "Authorized"
+                job.save(db, meta)
+    pending, checkpoint, evidence = guard.pending.read_bytes(), guard.cooldown.read_bytes(), table_rows(job)
+    with job.connect(read_only=True) as db:
+        audit = list(db.execute("SELECT * FROM audit"))
+    with pytest.raises(ValueError):
+        job.recover()
+    assert guard.pending.read_bytes() == pending and guard.cooldown.read_bytes() == checkpoint
+    assert table_rows(job) == evidence and not job.test_calls and not job.database.exists()
+    with job.connect(read_only=True) as db:
+        assert list(db.execute("SELECT * FROM audit")) == audit
+    if mismatch == "historical_block":
+        assert guard.block.read_bytes() == b"http_429"
+
+
+def test_released_reconciliation_preserves_old_policy_without_mutation(released_job):
+    job = released_job
+    mark_old_policy(job)
+    guard = RobloxActivity(job.database)
+    before = (
+        job.path.read_bytes(),
+        job.manifest_path.read_bytes(),
+        guard.pending.read_bytes(),
+        guard.cooldown.read_bytes(),
+    )
+    job.recover()
+    assert before == (
+        job.path.read_bytes(),
+        job.manifest_path.read_bytes(),
+        guard.pending.read_bytes(),
+        guard.cooldown.read_bytes(),
+    )
+    assert not job.test_calls
+
+
+@pytest.mark.parametrize("point", ["before_clear", "after_clear"])
+def test_second_process_death_during_pending_reconciliation_is_idempotent(released_job, point):
+    job = released_job
+    before = table_rows(job)
+    guard = RobloxActivity(job.database)
+    checkpoint, manifest = guard.cooldown.read_bytes(), job.manifest_path.read_bytes()
+    script = """
+import os,socket,sys
+from username_finder.roblox_prefilter import Prefilter
+from username_finder.roblox_activity import RobloxActivity
+def deny(*a,**kw): raise AssertionError("No dispatch during recovery")
+socket.socket.connect=socket.create_connection=deny
+clear=RobloxActivity.clear_pending
+def boundary(self):
+    if sys.argv[3]=='before_clear': os._exit(78)
+    clear(self)
+    os._exit(78)
+RobloxActivity.clear_pending=boundary
+Prefilter(sys.argv[1],sys.argv[2],transport=deny).recover()
+raise AssertionError('Recovery fault did not execute')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(job.directory), str(job.database), point],
+        capture_output=True,
+        timeout=15,
+        creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    assert result.returncode == 78, result.stderr.decode(errors="replace")
+    job.recover()
+    assert not job.test_calls and table_rows(job) == before
+    assert guard.pending.read_bytes().endswith(b"Clear\n")
+    pending, database = guard.pending.read_bytes(), job.path.read_bytes()
+    job.recover()
+    assert guard.pending.read_bytes() == pending and job.path.read_bytes() == database
+    assert guard.cooldown.read_bytes() == checkpoint and job.manifest_path.read_bytes() == manifest
+    done = execute(job)
+    assert done["counts"]["unknown"] == 2 and done["counts"]["excluded"] == 3
+    assert done["phases"]["pilot"]["state"] == "Completed"
+    requests = table_rows(job)["requests"]
+    assert requests[0] == before["requests"][0]
+    names = [name for row in requests for name in json.loads(row[3])]
+    assert len(names) == len(set(names)) == 5
+
+
+def test_newer_uncertain_request_is_not_cleared_as_the_released_429(released_job):
+    job = released_job
+    guard = RobloxActivity(job.database)
+    with job.connect() as db:
+        db.execute(
+            "INSERT INTO requests(phase,state,names,request_at) VALUES('pilot','Intent',?,?)",
+            (json.dumps(["User00002"]), job.wall().isoformat()),
+        )
+        db.execute("UPDATE names SET state='InFlight',request_id=2 WHERE username='User00002'")
+    with guard.pending.open("ab") as stream:
+        stream.write(("Pending:" + job.manifest()["fingerprint"] + ":2\n").encode())
+    pending, first = guard.pending.read_bytes(), table_rows(job)["requests"][0]
+    with pytest.raises(ValueError):
+        job.recover()
+    assert guard.pending.read_bytes() == pending and not job.test_calls
+    requests = table_rows(job)["requests"]
+    assert requests[0] == first and requests[-1][2] == "Uncertain"
+
+
+def test_released_reconciliation_still_requires_the_shared_activity_lock(released_job):
+    job = released_job
+    guard = RobloxActivity(job.database)
+    pending = guard.pending.read_bytes()
+    with recovery.shared(job):
+        with pytest.raises(ValueError):
+            job.recover()
+    assert guard.pending.read_bytes() == pending and not job.test_calls

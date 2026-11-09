@@ -159,6 +159,42 @@ def publish(service, guard, meta, stop):
         guard.restrict(stop)
 
 
+def _reconcile_released(service):
+    """Caller holds the operation lock; clear only its consumed 429's exact sentinel."""
+    with shared(service) as guard:
+        pending = b""
+        if guard.pending.exists():
+            with guard.pending.open("rb") as stream:
+                stream.seek(0, 2)
+                stream.seek(max(0, stream.tell() - 1024))
+                pending = stream.read(1024)
+        if not pending or pending.endswith(b"Clear\n"):
+            return
+        with service.connect(read_only=True) as db:
+            c = validate(service, db, service.meta(db))
+            authorization = db.execute(
+                "SELECT data FROM audit WHERE event='cooldown_authorization' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        approved = json.loads(authorization[0]) if authorization else {}
+        expected = ("Pending:" + service.manifest()["fingerprint"] + ":" + str(c["request_id"])).encode()
+        released = {
+            "version": 1,
+            "owner": owner(service),
+            "restriction": c["restriction"],
+            "state": "Released",
+        }
+        if (
+            c["stage"] != "Consumed"
+            or guard.cooldown_state() != released
+            or pending.rsplit(b"\n", 2)[-2:] != [expected, b""]
+            or approved.get("restriction") != c["restriction"]
+            or approved.get("authorization_hash") != c["authorization_hash"]
+            or approved.get("revision") != c["authorized_revision"] - 1
+        ):
+            raise ValueError("علامة Pending لا تطابق تفويض429 المستهلك وReleased؛ لا تسوية.")
+        guard.clear_pending()
+
+
 def sync(service):
     """Repair a killed process's publication gap without dispatching or approving work."""
     with RobloxActivity(service.path):
@@ -166,11 +202,10 @@ def sync(service):
             meta = service.meta(db)
             c = meta.get("cooldown")
             marker = RobloxActivity(service.database).cooldown_state()
-            if (
-                not c
-                or c["stage"] == "Escalated"
-                or (c["stage"] == "Consumed" and marker and marker["state"] == "Released")
-            ):
+            if not c or c["stage"] == "Escalated":
+                return
+            if c["stage"] == "Consumed" and marker and marker["state"] == "Released":
+                _reconcile_released(service)
                 return
             c = validate(service, db, meta)
         with shared(service) as guard:
