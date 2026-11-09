@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from .platform_workspace import ResultsPresentation
 from .roblox_bulk import BulkExperiment
+from .roblox_restriction import checking_permission
 
 LABELS = {
     "CurrentAccountMatchByAPI": "تطابق حساب حالي API",
@@ -116,6 +117,8 @@ class BulkPanel(QWidget):
         self.status.setText(str(message))
 
     def prepare(self):
+        if self.owner.busy or self.closing:
+            return
         try:
             root = Path(__file__).resolve().parents[1] / "experiments/roblox-bulk-validation/output"
             self.experiment.prepare(
@@ -131,12 +134,17 @@ class BulkPanel(QWidget):
             self.notify(exc)
 
     def refresh(self):
+        if self.closing:
+            for button in self.buttons.values():
+                button.setEnabled(False)
+            return
         exists = self.experiment.manifest_path.exists()
         for key, button in self.buttons.items():
-            button.setEnabled(not self.busy and not self.closing and (key == "prepare" or exists))
+            button.setEnabled(not self.owner.busy and not self.closing and (key == "prepare" or exists))
         self.buttons["stop"].setEnabled(self.busy)
         self.owner.checking_mode.setEnabled(not self.busy and not self.owner.busy and not self.closing)
         if not exists:
+            self.gate_dispatch()
             return
         try:
             report = self.experiment.report()
@@ -187,6 +195,17 @@ class BulkPanel(QWidget):
             for phase in ("stage1", "comparison", "stage2"):
                 self.buttons[phase].setEnabled(False)
             self.notify("تعذر تدقيق الدليل؛ لم يُسمح بالتشغيل: " + str(exc))
+        self.gate_dispatch()
+
+    def gate_dispatch(self, permission=None):
+        permission = permission or checking_permission(self.owner.repo, purpose="bulk")
+        for key, button in self.buttons.items():
+            if key != "stop" and (self.owner.busy or self.closing):
+                button.setEnabled(False)
+            if key in ("stage1", "comparison", "stage2"):
+                if not permission["allowed"]:
+                    button.setEnabled(False)
+                button.setToolTip("" if permission["allowed"] else permission["reason"])
 
     def inspect(self):
         try:
@@ -222,6 +241,11 @@ class BulkPanel(QWidget):
     def start(self, phase):
         if self.busy or self.closing or self.owner.busy:
             return
+        permission = checking_permission(self.owner.repo, purpose="bulk")
+        if not permission["allowed"]:
+            self.notify(permission["reason"])
+            self.refresh()
+            return
         try:
             token = self.experiment.review(phase)
             manifest = self.experiment.manifest()
@@ -236,6 +260,7 @@ class BulkPanel(QWidget):
                 return
             self.experiment.cancel.clear()
             self.busy = True
+            self.owner.controls()
             self.refresh()
             self.notify("جارٍ التنفيذ المتسلسل — إيقاف متاح.")
             future = self.executor.submit(self.experiment.run, phase, token)
@@ -255,6 +280,7 @@ class BulkPanel(QWidget):
     def done(self, error):
         self.busy = False
         self.refresh()
+        self.owner.controls()
         if error:
             self.notify(error)
         if self.closing:
@@ -266,6 +292,8 @@ class BulkPanel(QWidget):
         self.notify("طُلب الإيقاف؛ الطلب الجاري محدود بمهلة 10 ثوانٍ ثم يُحفظ الدليل.")
 
     def export(self, kind):
+        if self.owner.busy or self.closing:
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "تصدير دليل تجريبي جديد", "", f"{kind.upper()} (*.{kind})"
         )

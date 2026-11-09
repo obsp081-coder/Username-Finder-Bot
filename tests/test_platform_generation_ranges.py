@@ -163,17 +163,12 @@ def test_preparation_restart_retains_exact_candidates_and_config(platform, tmp_p
     if module is roblox:
         identity = prepare(module, repo, config, cancel=cancel, notify=lambda _: cancel.set())
     else:
-        original = module.candidates
 
-        def interrupted(spec):
-            for index, name in enumerate(original(spec)):
-                if index == 3:
-                    cancel.set()
-                yield name
+        def checkpoint(identity):
+            if repo.progress(identity)["cursor"] >= 1000:
+                cancel.set()
 
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(module, "candidates", interrupted)
-            identity = prepare(module, repo, config, cancel=cancel)
+        identity = prepare(module, repo, config, cancel=cancel, notify=checkpoint)
     assert repo.progress(identity)["state"] == "PreparationPaused"
     prefix = queued(repo, identity)
     assert prefix and prefix == expected[: len(prefix)]
@@ -232,7 +227,8 @@ def test_mixed_checks_cancel_restart_history_skip_filter_export(platform, tmp_pa
         worker(repo).run(identity)
         assert calls == expected and len(set(calls)) == 9
         assert repo.progress(identity)["state"] == "Completed"
-        assert repo.results("Available")[1] == 9
+        expected_class = "Available" if module is roblox else "Taken"
+        assert repo.results(expected_class)[1] == 9
         assert all(len(repo.history(name)) == 1 for name in expected)
         repeat = prepare(module, repo, config)
         assert repo.progress(repeat)["skipped"] == 9
@@ -242,7 +238,7 @@ def test_mixed_checks_cancel_restart_history_skip_filter_export(platform, tmp_pa
         if module is roblox:
             repo.export_csv(target, "Available")
         else:
-            repo.export(target, "Available")
+            repo.export(target, expected_class)
         with target.open(encoding="utf-8-sig", newline="") as stream:
             rows = list(csv.DictReader(stream))
         assert {row["username"] for row in rows} == set(expected)

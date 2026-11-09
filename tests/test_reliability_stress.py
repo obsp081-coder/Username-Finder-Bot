@@ -113,7 +113,12 @@ def test_virtual_overnight_concurrent_with_large_history_and_readers(tmp_path):
                     raise error()
                 if platform == "Roblox":
                     return roblox_response((0, 1, 12, 3)[index % 4])
-                valid, reason = ((True, "available"), (False, "taken"), (False, "is_banned_word"))[index % 3]
+                # Availability is disputed: an overnight success fixture must use supported negatives.
+                valid, reason = (
+                    (False, "taken"),
+                    (False, "is_banned_word"),
+                    (False, "contains_banned_word"),
+                )[index % 3]
                 return x_response(valid, reason)
             finally:
                 with mutex:

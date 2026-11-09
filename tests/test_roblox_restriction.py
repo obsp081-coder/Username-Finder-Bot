@@ -14,9 +14,20 @@ from username_finder import roblox_protocol as protocol
 from username_finder.roblox_activity import RobloxActivity
 from username_finder.roblox_restriction import (
     RestrictionDiagnostic,
+    checking_permission,
     diagnostic_summary,
     restriction_status,
 )
+
+
+def test_permission_seeks_inflight_without_scanning_pending_rows(repository):
+    repository.create_run(f"Name{i:08d}" for i in range(5000))
+    # Indexed readiness must remain bounded by runs, not by all pending names.
+    repository.store.db.set_progress_handler(lambda: 1, 1000)
+    try:
+        assert checking_permission(repository)["allowed"]
+    finally:
+        repository.store.db.set_progress_handler(None, 0)
 
 
 def control(repo, **changes):

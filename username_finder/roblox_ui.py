@@ -42,7 +42,12 @@ from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
 from .roblox_bulk_ui import BulkPanel
 from .roblox_prefilter_ui import PrefilterPanel
-from .roblox_restriction import RestrictionDiagnostic, diagnostic_summary, restriction_status
+from .roblox_restriction import (
+    RestrictionDiagnostic,
+    checking_permission,
+    diagnostic_summary,
+    restriction_status,
+)
 from .roblox_runner import RobloxRunner
 from .roblox_storage import CHECK_INTERVALS, RobloxStore
 from .ui_cards import Card, CardGrid, Disclosure, ModeStrip, caption, icon
@@ -101,6 +106,7 @@ class RobloxPanel(QScrollArea):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="roblox")
         self.runner = None
         self.diagnostic = None
+        self._restriction_automatic = False
         self.busy = self.closing = False
         self.stopping = False
         self.current_run = None
@@ -389,6 +395,8 @@ class RobloxPanel(QScrollArea):
         self.bulk.setVisible(index == 1)
         self.prefilter.setVisible(index == 2)
         self.activity_status.setVisible(index == 0)
+        self.bulk.refresh()
+        self.controls()
 
     @staticmethod
     def _button(label, callback):
@@ -431,7 +439,7 @@ class RobloxPanel(QScrollArea):
         self.preparing = False
         self.runner = None
         self.diagnostic = None
-        if error:
+        if error and not self.closing:
             if was_diagnostic:
                 self.restriction_label.setText(error + "\nتعذر إكمال التشخيص؛ لا إعادة تلقائية.")
             self.status.setText(error)
@@ -441,12 +449,20 @@ class RobloxPanel(QScrollArea):
         elif not self.closing:
             callback(value)
         if not self.busy:
+            self.bulk.refresh()
             self.controls()
             if self.closing:
                 self.executor.shutdown(wait=False)
             self.idle.emit()
 
     def controls(self):
+        if self.closing:
+            for button in self.findChildren(QPushButton):
+                button.setEnabled(False)
+            self.checking_mode.setEnabled(False)
+            return
+        permission = checking_permission(self.repo, purpose="individual")
+        dispatch_allowed = permission["allowed"] and not self.busy and not self.closing
         self.diagnostic_cancel_button.setVisible(self.diagnostic is not None)
         self.diagnostic_cancel_button.setEnabled(self.diagnostic is not None and not self.closing)
         self.restriction_button.setEnabled(not self.closing)
@@ -468,14 +484,29 @@ class RobloxPanel(QScrollArea):
         self.stop_button.setEnabled(
             self.busy and (self.runner is not None or self.preparing or self.diagnostic is not None)
         )
+        for widget in (self.start_button, self.recheck_all_button, self.recheck_selected_button):
+            widget.setEnabled(dispatch_allowed)
+            widget.setToolTip(permission["reason"])
+        if hasattr(self, "bulk"):
+            self.bulk.gate_dispatch()
+        if hasattr(self, "prefilter"):
+            self.prefilter.controls()
+        if not self.busy:
+            if not permission["allowed"] and (
+                self._restriction_automatic or not self.restriction_label.text()
+            ):
+                self.restriction_label.setText(permission["reason"] + "\nحالة الموفر الآن غير معروفة.")
+                self.restriction_label.show()
+                self._restriction_automatic = True
+            elif permission["allowed"] and self._restriction_automatic:
+                self.restriction_label.clear()
+                self.restriction_label.hide()
+                self._restriction_automatic = False
         if self.busy and self.preparing:
             self.resume_button.setEnabled(False)
             return
-        blocked = self.repo.control().get("blocked", False)
-        if blocked:
-            for widget in (self.start_button, self.recheck_all_button, self.recheck_selected_button):
-                widget.setEnabled(False)
         run = self.repo.progress(self.current_run) if self.current_run else None
+        local_preparation = run and run["state"] in ("Preparing", "PreparationPaused", "PreparationError")
         self.resume_button.setText(
             "استئناف التحضير المحلي"
             if run and run["state"] in ("Preparing", "PreparationPaused", "PreparationError")
@@ -486,7 +517,7 @@ class RobloxPanel(QScrollArea):
             and not self.closing
             and run is not None
             and run["state"] != "Completed"
-            and not blocked
+            and (permission["allowed"] or local_preparation)
         )
 
     def speed_changed(self):
@@ -494,11 +525,26 @@ class RobloxPanel(QScrollArea):
         self.show_effective_speed()
 
     def check_restriction(self):
+        self._restriction_automatic = False
         status = restriction_status(self.repo)
         self.restriction_label.show()
         prefix = "واجهة Roblox مشغولة؛ التشخيص غير متاح حتى انتهاء العملية.\n" if self.busy else ""
         self.restriction_label.setText(prefix + status["text"])
+        self.bulk.refresh()
+        self.controls()
         self.diagnostic_button.setEnabled(status["allowed"] and not self.busy and not self.closing)
+
+    def allow_dispatch(self):
+        if self.busy or self.closing:
+            return False
+        permission = checking_permission(self.repo, purpose="individual")
+        if not permission["allowed"]:
+            self.restriction_label.setText(
+                permission["reason"] + "\nلم يُرسل طلب. حالة الموفر الآن غير معروفة."
+            )
+            self.restriction_label.show()
+            self.controls()
+        return permission["allowed"]
 
     def start_diagnostic(self):
         if self.busy or self.closing:
@@ -556,6 +602,8 @@ class RobloxPanel(QScrollArea):
         self._fit_mode()
 
     def prepare(self, start_after=False, *, save_job=False):
+        if start_after and not self.allow_dispatch():
+            return
         if self.busy or self.closing:
             return
         generated = self.modes.currentIndex() == 0
@@ -632,7 +680,7 @@ class RobloxPanel(QScrollArea):
         self.prepare(start_after=True)
 
     def _start_run(self, identity, *, automatic=False):
-        if self.busy or self.closing:
+        if not self.allow_dispatch():
             return
         self.current_run = identity
         self.overnight.arm(identity)
@@ -674,7 +722,7 @@ class RobloxPanel(QScrollArea):
                 )
 
     def resume(self):
-        if self.current_run and not self.busy:
+        if self.current_run and not self.busy and not self.closing:
             run = self.repo.progress(self.current_run)
             if run["state"] in {"PreparationPaused", "PreparationError", "Preparing"}:
                 self.preparation_cancel.clear()
@@ -731,7 +779,7 @@ class RobloxPanel(QScrollArea):
         )
 
     def recheck_all(self):
-        if self.busy:
+        if not self.allow_dispatch():
             return
         count = self.repo.known_count()
         if not count:
@@ -755,6 +803,8 @@ class RobloxPanel(QScrollArea):
         return self.rows[index] if 0 <= index < len(self.rows) else None
 
     def recheck_selected(self):
+        if not self.allow_dispatch():
+            return
         row = self.selected()
         if row and not self.busy and self._confirm(f"إعادة فحص {row['username']} مع حفظ تاريخه؟"):
             self._submit(

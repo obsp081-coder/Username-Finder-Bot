@@ -71,7 +71,7 @@ def prepare(folder):
     folder.mkdir(parents=True, exist_ok=False)
     for name in ("records", "raw", "intents"):
         (folder / name).mkdir()
-    names = generate(12, PER_STAGE * len(STAGES)).names
+    names = list(generate(12, PER_STAGE * len(STAGES)))
     manifest = [
         {
             "index": i + 1,

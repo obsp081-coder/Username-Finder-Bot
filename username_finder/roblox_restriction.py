@@ -21,7 +21,7 @@ RECORDED_REASONS = {
 }
 
 
-def _local_status(repo, at):
+def _local_status(repo, at, purpose):
     guard = RobloxActivity(repo.store.path)
     if guard.block.exists():
         with guard.block.open("rb") as stream:
@@ -54,24 +54,29 @@ def _local_status(repo, at):
         return False, "قيد أمان فردي محفوظ؛ راجع آخر نتيجة وسبب توقف العملية يدويًا قبل أي تشغيل."
     if control.get("active_run"):
         return False, "توجد عملية Roblox مسجلة كنشطة؛ انتظر انتهائها أو راجع الاسترداد المعتاد."
+    if purpose == "bulk" and control.get("restriction_streak", 0):
+        return False, "قيد فردي محفوظ يحتاج مراجعة قبل Bulk؛ انقضاء المهلة وحده لا يكفي."
+    waiting = ""
     deadline = control.get("not_before")
     if deadline:
         parsed = datetime.fromisoformat(deadline)
         if parsed.tzinfo is None:
             raise ValueError("Naive restriction deadline")
         if parsed > at:
-            return (
-                False,
-                f"موعد عدم الإرسال المحفوظ لم ينقضِ: {parsed.astimezone(UTC).isoformat()}. "
-                "انتظر ثم تحقق محليًا.",
+            waiting = (
+                f"موعد عدم الإرسال المحفوظ: {parsed.astimezone(UTC).isoformat()}. "
+                "سينتظر العامل الموعد قبل الإرسال؛ الإيقاف متاح."
             )
+            if purpose != "individual":
+                return False, waiting + " انتظر ثم تحقق محليًا."
     with repo.store.lock:
         inflight = repo.store.db.execute(
-            "SELECT 1 FROM roblox_queue WHERE state='InFlight' LIMIT 1"
+            "SELECT 1 FROM roblox_queue WHERE run_id IN (SELECT id FROM roblox_runs) "
+            "AND state='InFlight' LIMIT 1"
         ).fetchone()
     if inflight:
         return False, "توجد نية إرسال فردية غير محسومة؛ راجع الاسترداد المعتاد دون إعادة الطلب."
-    return True, "الحواجز المحلية تسمح بطلب تشخيص واحد عند تأكيده؛ هذا لا يثبت أن Roblox سيسمح به."
+    return True, waiting or "الحواجز المحلية تسمح بالتشغيل المؤكد؛ حالة الموفر الحالية غير معروفة."
 
 
 def _last_observation(repo):
@@ -94,22 +99,34 @@ def _last_observation(repo):
     return f"آخر محاولة فردية محفوظة: {http} • {classification} (أولي) • {at.isoformat()}."
 
 
-def restriction_status(repo, *, at=None, lock_held=False):
-    """Never recover, release markers, update SQL or send a request."""
+def checking_permission(repo, *, at=None, lock_held=False, purpose="diagnostic"):
+    """Cheap fail-closed readiness, without loading historical response bodies."""
     at = at or datetime.now(UTC)
+    if purpose not in ("individual", "bulk", "diagnostic"):
+        raise ValueError("Unsupported checking purpose")
     try:
-        allowed, local = _local_status(repo, at)
+        allowed, local = _local_status(repo, at, purpose)
         if allowed and not lock_held:
             # No recovery callbacks: the normal shared guard remains authoritative.
             try:
                 with RobloxActivity(repo.store.path):
-                    allowed, local = _local_status(repo, at)
+                    allowed, local = _local_status(repo, at, purpose)
             except ValueError as exc:
                 allowed, local = False, str(exc)
-        observation = _last_observation(repo)
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         allowed = False
         local = "تعذر تأكيد الحواجز أو سلامة الحالة المحلية؛ يلزم تدقيق يدوي، ولن يُرسل طلب."
+    return {"allowed": allowed, "reason": local}
+
+
+def restriction_status(repo, *, at=None, lock_held=False):
+    """Never recover, release markers, update SQL or send a request."""
+    permission = checking_permission(repo, at=at, lock_held=lock_held)
+    allowed, local = permission["allowed"], permission["reason"]
+    try:
+        observation = _last_observation(repo)
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        allowed = False
         observation = "تعذر تأكيد آخر محاولة محفوظة."
     return {
         "allowed": allowed,

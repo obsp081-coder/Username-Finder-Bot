@@ -32,6 +32,7 @@ from .roblox_bulk import write_new
 from .roblox_prefilter import MAX_CONFIGURED_BATCH, VERIFIED_OPERATIONAL_BATCH, Prefilter
 from .roblox_prefilter_estimates import calculate, duration_text
 from .roblox_prefilter_review import inspect_operation, record_review
+from .roblox_restriction import checking_permission
 from .ui_cards import Card, CardGrid, Disclosure, icon
 
 STATE_LABELS = {
@@ -306,7 +307,14 @@ class PrefilterPanel(QWidget):
         self.estimate_note.setToolTip(details)
         self.estimates.setToolTip(details)
 
-    def controls(self):
+    def controls(self, permission=None):
+        if self.closing:
+            for button in self.buttons.values():
+                button.setEnabled(False)
+            for widget in (self.delay, self.batch, self.pilot_size):
+                widget.setEnabled(False)
+            return
+        permission = permission or checking_permission(self.owner.repo, purpose="bulk")
         marker = RobloxActivity(self.owner.repo.store.path).block
         self.shared_restriction = marker.exists()
         if self.shared_restriction and self.snapshot is None:
@@ -328,9 +336,16 @@ class PrefilterPanel(QWidget):
             self.restriction_notice.show()
         for key, button in self.buttons.items():
             button.setEnabled(
-                not self.busy and not self.closing and (key in ("file", "open") or self.service is not None)
+                not self.owner.busy
+                and not self.closing
+                and (key in ("file", "open") or self.service is not None)
             )
-        self.buttons["prepare"].setEnabled(not self.busy and not self.closing and bool(self.source.text()))
+        self.buttons["prepare"].setEnabled(
+            not self.owner.busy and not self.closing and bool(self.source.text())
+        )
+        for phase in ("pilot", "full"):
+            self.buttons[phase].setEnabled(False)
+            self.buttons[phase].setToolTip("" if permission["allowed"] else permission["reason"])
         self.buttons["stop"].setEnabled(self.busy)
         c = (self.snapshot or {}).get("cooldown", {})
         future_hold = c.get("stage") in ("PendingReview", "Reviewed", "Authorized")
@@ -344,10 +359,15 @@ class PrefilterPanel(QWidget):
             and not self.shared_restriction
             and c.get("stage") == "Reviewed"
         )
+        if self.buttons["continue_cooldown"].isEnabled():
+            try:
+                cooldown_protocol.authorization_review(self.service)
+            except (ValueError, OSError):
+                self.buttons["continue_cooldown"].setEnabled(False)
         for widget in (self.delay, self.batch, self.pilot_size):
             widget.setEnabled(not self.busy and self.service is None and not self.closing)
         self.owner.checking_mode.setEnabled(not self.owner.busy and not self.closing)
-        if self.snapshot:
+        if self.snapshot and self.service is not None:
             for phase in ("pilot", "full"):
                 eligible = self.snapshot["import_state"] == "Ready"
                 if phase == "full":
@@ -358,7 +378,9 @@ class PrefilterPanel(QWidget):
                 eligible &= not (self.snapshot.get("shared_cooldown") or {}).get("state") == "Hold"
                 eligible &= self.snapshot["manifest"]["settings"]["batch_size"] <= VERIFIED_OPERATIONAL_BATCH
                 eligible &= self.snapshot.get("timing_policy_current", False)
-                self.buttons[phase].setEnabled(bool(eligible and not self.busy and not self.closing))
+                self.buttons[phase].setEnabled(
+                    bool(eligible and permission["allowed"] and not self.owner.busy and not self.closing)
+                )
         self.refresh_estimates()
 
     def new_service(self, directory):
@@ -378,6 +400,7 @@ class PrefilterPanel(QWidget):
         self.busy = True
         self.service.cancel.clear()
         self.controls()
+        self.owner.controls()
         self.status.setText("جارٍ العمل؛ الإيقاف متاح، والنتائج تُحفظ تدريجيًا.")
         future = self.executor.submit(function)
 
@@ -409,6 +432,8 @@ class PrefilterPanel(QWidget):
         if self.closing:
             self.executor.shutdown(wait=False)
         self.controls()
+        self.owner.bulk.refresh()
+        self.owner.controls()
         self.idle.emit()
 
     def show_progress(self, data):
@@ -567,6 +592,11 @@ class PrefilterPanel(QWidget):
 
     def start(self, phase):
         if self.owner.busy or self.closing or self.service is None:
+            return
+        permission = checking_permission(self.owner.repo, purpose="bulk")
+        if not permission["allowed"]:
+            self.status.setText(permission["reason"])
+            self.controls(permission)
             return
         try:
             token = self.service.review(phase)

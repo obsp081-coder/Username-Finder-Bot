@@ -1,18 +1,19 @@
-"""Mocked routes and loopback TLS proxies; PEM fixtures are public test-only keys."""
+"""Mocked routes and loopback TLS proxies with temporary, generated test certificates."""
 
 import json
 import select
 import socket
 import socketserver
 import ssl
+import sys
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 from test_x import Clock, response
 
+from tools.roblox_pipeline_benchmark import certificate
 from username_finder import x
 from username_finder import x_connection as connection
 from username_finder import x_protocol as protocol
@@ -20,8 +21,17 @@ from username_finder.storage import Store
 from username_finder.x_runner import XRunner
 from username_finder.x_storage import XStore
 
-CERT = Path(__file__).parent / "fixtures/x_proxy_test_cert.pem"
-KEY = CERT.with_name("x_proxy_test_key.pem")
+CERT = KEY = None
+
+
+@pytest.fixture(scope="module", autouse=True)
+def ephemeral_tls_material(tmp_path_factory):
+    folder = tmp_path_factory.mktemp("x-proxy-tls")
+    certificate(folder)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(sys.modules[__name__], "CERT", folder / "cert.pem")
+        patch.setattr(sys.modules[__name__], "KEY", folder / "key.pem")
+        yield
 
 
 @pytest.mark.parametrize("url", ["http://localhost:8080", "https://proxy.example:443", "http://[::1]:3128"])
