@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import roblox_prefilter_cooldown as cooldown_protocol
 from .roblox_activity import RobloxActivity
 from .roblox_bulk import write_new
 from .roblox_prefilter import MAX_CONFIGURED_BATCH, VERIFIED_OPERATIONAL_BATCH, Prefilter
@@ -40,6 +41,7 @@ STATE_LABELS = {
     "Completed": "مكتملة",
     "Restricted": "متوقفة وقائيًا",
     "ReviewRequired": "تحتاج مراجعة",
+    "Cooldown": "مهلة محفوظة؛ انتظار مراجعة وتفويض منفصل",
 }
 
 
@@ -180,6 +182,7 @@ class PrefilterPanel(QWidget):
             ("inspect", "مراجعة الحالة والدليل", self.inspect),
             ("restriction", "مراجعة القيد والتوافق — دون اتصال", self.review_restriction),
             ("acknowledge", "تسجيل مراجعة الدليل — لا يرفع القيد", self.acknowledge_restriction),
+            ("continue_cooldown", "تفويض استمرار الأسماء غير المحاوَلة فقط", self.continue_cooldown),
             ("export_review", "تصدير تقرير القيد والتوافق…", self.export_review),
             ("pilot", "تفويض / استئناف التجربة المحدودة", lambda: self.start("pilot")),
             ("full", "تفويض / استئناف الباقي", lambda: self.start("full")),
@@ -203,6 +206,7 @@ class PrefilterPanel(QWidget):
                 "inspect": "review",
                 "restriction": "review",
                 "acknowledge": "review",
+                "continue_cooldown": "review",
                 "export_review": "review",
                 "recover": "review",
                 "review": "review",
@@ -328,6 +332,18 @@ class PrefilterPanel(QWidget):
             )
         self.buttons["prepare"].setEnabled(not self.busy and not self.closing and bool(self.source.text()))
         self.buttons["stop"].setEnabled(self.busy)
+        c = (self.snapshot or {}).get("cooldown", {})
+        future_hold = c.get("stage") in ("PendingReview", "Reviewed", "Authorized")
+        self.buttons["acknowledge"].setText(
+            "مراجعة وانتظار المهلة — دون إرسال" if future_hold else "تسجيل مراجعة الدليل — لا يرفع القيد"
+        )
+        self.buttons["continue_cooldown"].setEnabled(
+            not self.busy
+            and not self.closing
+            and not self.owner.busy
+            and not self.shared_restriction
+            and c.get("stage") == "Reviewed"
+        )
         for widget in (self.delay, self.batch, self.pilot_size):
             widget.setEnabled(not self.busy and self.service is None and not self.closing)
         self.owner.checking_mode.setEnabled(not self.owner.busy and not self.closing)
@@ -339,6 +355,7 @@ class PrefilterPanel(QWidget):
                 state = self.snapshot["phases"].get(phase, {}).get("state", "Ready")
                 eligible &= state in ("Ready", "Paused") and self.snapshot["unprocessed"] > 0
                 eligible &= not (self.shared_restriction or self.snapshot.get("provider_blocked", False))
+                eligible &= not (self.snapshot.get("shared_cooldown") or {}).get("state") == "Hold"
                 eligible &= self.snapshot["manifest"]["settings"]["batch_size"] <= VERIFIED_OPERATIONAL_BATCH
                 eligible &= self.snapshot.get("timing_policy_current", False)
                 self.buttons[phase].setEnabled(bool(eligible and not self.busy and not self.closing))
@@ -441,6 +458,18 @@ class PrefilterPanel(QWidget):
             self.review_details.setToolTip(json.dumps(review, ensure_ascii=False, indent=2))
         else:
             self.review_details.setText("استخدم مراجعة القيد والتوافق لعرض الدليل والترويسات دون اتصال.")
+        cooldown = data.get("cooldown", {})
+        if cooldown.get("stage") in ("PendingReview", "Reviewed", "Authorized"):
+            self.review_details.setText(
+                "مهلة429 مستقبلية محفوظة: "
+                + cooldown["stage"]
+                + "\n"
+                + "لا استمرار قبل: "
+                + cooldown["not_before"]
+                + "\n"
+                + "الأسماء المتأثرة تبقى Unknown ولا تُعاد. راجع الدليل وانتظر المهلة، "
+                "ثم فوّض الاستمرار منفصلًا. " + "انتهاء الوقت لا يرسل طلبات، و429 آخر يوقف العمل وقائيًا."
+            )
         self.restriction_notice.setVisible(restricted or bool(stops))
         self.restriction_notice.setText(
             "توقف وقائي محفوظ: "
@@ -564,10 +593,48 @@ class PrefilterPanel(QWidget):
             self.submit(lambda: inspect_operation(self.service))
 
     def acknowledge_restriction(self):
+        if (
+            self.service
+            and self.snapshot
+            and self.snapshot.get("cooldown", {}).get("stage") in ("PendingReview", "Reviewed", "Authorized")
+        ):
+            snapshot = self.snapshot
+            if self.confirm(
+                "راجع دليل429 والترويسات والأسماء المجهولة. سيسجل الإقرار ثم ينتظر المهلة فقط؛ "
+                "الإيقاف متاح ولا طلبات. هل تؤكد المراجعة؟"
+            ):
+
+                def work():
+                    cooldown_protocol.review(
+                        self.service, snapshot["cooldown"]["restriction"], snapshot["revision"]
+                    )
+                    return cooldown_protocol.wait_reviewed(self.service)
+
+                self.submit(work)
+            return
         if self.service and self.confirm(
             "سيسجل إقرار محلي بمراجعة الدليل فقط. لا يرفع الحظر أو يجيز اتصالًا أو يغير النتائج. هل تؤكد؟"
         ):
             self.submit(lambda: record_review(self.service, self.service.manifest()["fingerprint"]))
+
+    def continue_cooldown(self):
+        if not self.service or self.busy or self.owner.busy or self.closing:
+            return
+        try:
+            approval = cooldown_protocol.authorization_review(self.service)
+            phase = self.service.summary()["cooldown"]["phase"]
+            if self.confirm(
+                "تفويض لمرة واحدة لهذا الطور وحالته الحالية فقط. ستُرسل الأسماء غير المحاوَلة، "
+                "وتبقى دفعة429 مجهولة دون إعادة. لا يشمل التفويض الطور التالي. هل تفوض الاستمرار؟"
+            ):
+
+                def work():
+                    token = cooldown_protocol.authorize(self.service, approval)
+                    return self.service.run(phase, token)
+
+                self.submit(work)
+        except Exception as exc:
+            self.status.setText(str(exc))
 
     def export_review(self):
         if not self.service:

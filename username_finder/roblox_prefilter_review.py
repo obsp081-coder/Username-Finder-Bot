@@ -128,6 +128,14 @@ def inspect_operation(service):
         ),
         "rate_limit_advisory": rate,
     }
+    if snapshot.get("cooldown", {}).get("stage") in ("PendingReview", "Reviewed", "Authorized"):
+        report["operational_cooldown"] = snapshot["cooldown"]
+        report["recovery_decision"] = "Explicit cooldown review and separate one-time authorization required"
+        report["explanation_ar"] = (
+            "مهلة429 مستقبلية: راجع الدليل وانتظر الموعد المحفوظ، ثم فوّض الاستمرار منفصلًا. "
+            "لا إرسال من هذا التقرير أو من انتهاء المهلة؛ دفعة429 تبقى Unknown ولا تعاد. "
+            "أي قيد تاريخي أو مستقل مقدم دائمًا على هذا المسار."
+        )
     return dict(snapshot, restriction_review=report)
 
 

@@ -17,6 +17,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from . import roblox_bulk_protocol as bulk
+from . import roblox_prefilter_cooldown as cooldown_protocol
 from . import roblox_prefilter_transport as transport_protocol
 from .roblox import input_spec, input_values, syntax_error
 from .roblox_activity import RobloxActivity
@@ -58,6 +59,9 @@ def policy():
         Path(__file__).read_bytes()
         + Path(bulk.__file__).read_bytes()
         + Path(transport_protocol.__file__).read_bytes()
+        + Path(cooldown_protocol.__file__).read_bytes()
+        + Path(__file__).with_name("roblox_activity.py").read_bytes()
+        + Path(__file__).with_name("roblox_cooldown.py").read_bytes()
     )
 
 
@@ -176,6 +180,7 @@ class Prefilter:
                 raise ValueError("اختر TXT أو CSV بترميز UTF-8.")
             value = {
                 "version": 1,
+                "cooldown_recovery": 1,
                 "source": spec,
                 "source_sha256": self.hash_source(source),
                 "settings": config,
@@ -358,6 +363,7 @@ class Prefilter:
                 last_request=last_request,
                 pacing_remaining_seconds=pacing_remaining,
                 provider_blocked=RobloxActivity(self.database).block.exists(),
+                shared_cooldown=RobloxActivity(self.database).cooldown_state(),
                 timing_policy_current=manifest["policy"] == policy(),
             )
             meta["samples"] = [
@@ -506,6 +512,7 @@ class Prefilter:
             ("SafetyStop" if stop else "Completed", stop, request["id"]),
         )
         self.audit(db, "decision_checkpoint", {"request_id": request["id"], "stop": stop})
+        cooldown_protocol.capture(self, db, meta, request, stop)
         self.save(db, meta)
         return stop
 
@@ -576,6 +583,7 @@ class Prefilter:
                         )
                 if bulk.encoded(meta) != before:
                     self.save(db, meta)
+        cooldown_protocol.sync(self)
         return self.summary()
 
     def review_uncertain(self, confirmation):
@@ -610,6 +618,8 @@ class Prefilter:
             raise ValueError("حجم أكبر من20 للتقدير والتحضير فقط؛ دعم الموفر غير مثبت والإرسال محظور.")
         if summary["provider_blocked"]:
             raise ValueError("قيد Bulk محفوظ؛ راجع الدليل. لا تفويض أو تحرير تلقائي.")
+        if summary["shared_cooldown"] and summary["shared_cooldown"]["state"] == "Hold":
+            raise ValueError("مهلة مشتركة محفوظة؛ راجع دليلها وفوّض الاستمرار بصورة منفصلة.")
         if summary["import_state"] != "Ready" or not summary["counts"]["valid"]:
             raise ValueError("يلزم اكتمال استيراد صالح محليًا أولًا.")
         if summary["manifest"]["policy"] != policy():
@@ -646,13 +656,19 @@ class Prefilter:
             )
 
     def run(self, phase, authorization):
-        if not authorization or authorization != self.review(phase):
+        with self.connect(read_only=True) as db:
+            continuation = self.meta(db).get("cooldown", {}).get("stage") == "Authorized"
+        if not authorization or (not continuation and authorization != self.review(phase)):
             raise ValueError("يلزم تفويض صريح للحالة الحالية.")
         with (
             RobloxActivity(self.path),
-            RobloxActivity(self.database, recover_pending=self._can_clear_pending) as guard,
+            (
+                cooldown_protocol.shared(self)
+                if continuation
+                else RobloxActivity(self.database, recover_pending=self._can_clear_pending)
+            ) as guard,
         ):
-            if authorization != self.review(phase):
+            if not continuation and authorization != self.review(phase):
                 raise ValueError("تغيرت الحالة بعد المراجعة.")
             control = self.control()
             if (
@@ -667,6 +683,8 @@ class Prefilter:
             started, last_finished = self.clock(), None
             with self.connect() as db:
                 meta = self.meta(db)
+                if continuation:
+                    cooldown_protocol.consume(self, db, meta, phase, authorization)
                 if phase not in meta["phases"]:
                     meta["phases"][phase] = {
                         "state": "Ready",
@@ -678,9 +696,22 @@ class Prefilter:
                 p = meta["phases"][phase]
                 baseline = p["elapsed_seconds"]
                 p.update(state="Running", stop_reason="")
-                self.audit(db, "authorization", {"phase": phase, "token": authorization, "settings": config})
+                self.audit(
+                    db,
+                    "authorization",
+                    {
+                        "phase": phase,
+                        "token": bulk.digest(authorization.encode()) if continuation else authorization,
+                        "settings": config,
+                    },
+                )
                 self.save(db, meta)
                 db.commit()
+                if continuation:
+                    guard.checkpoint_cooldown(
+                        cooldown_protocol.owner(self), meta["cooldown"]["restriction"], "Released"
+                    )
+                    guard.clear_pending()
                 try:
                     while p["processed"] < p["target"] and not self.cancel.is_set():
                         rows = db.execute(
@@ -750,7 +781,7 @@ class Prefilter:
                         stop = self._finish(db, request, response, meta)
                         db.commit()
                         if stop:
-                            guard.restrict(stop)
+                            cooldown_protocol.publish(self, guard, meta, stop)
                         else:
                             guard.clear_pending()
                         self.updated()
