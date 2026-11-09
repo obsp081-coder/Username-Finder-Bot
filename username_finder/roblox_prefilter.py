@@ -305,6 +305,10 @@ class Prefilter:
                             }
                         }
                 except Exception as exc:
+                    # SQLite FULL/IO failures may roll back the whole current chunk.
+                    # Reload counters and cursor from the last committed checkpoint too.
+                    db.rollback()
+                    meta = self.meta(db)
                     meta["import_state"] = "ImportError"
                     meta["import_error"] = type(exc).__name__ + ": " + str(exc)
                 self.save(db, meta)
@@ -322,6 +326,21 @@ class Prefilter:
             requests = (c["valid"] + batch - 1) // batch
             pilot = min(c["valid"], config["pilot_names"])
             budget = (pilot + batch - 1) // batch + (max(0, c["valid"] - pilot) + batch - 1) // batch
+            last = db.execute(
+                "SELECT id,phase,state,names,response_at,stop FROM requests ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            last_request = (
+                {k: last[k] for k in ("id", "phase", "state", "response_at", "stop")} if last else None
+            )
+            if last_request:
+                last_request["affected_names"] = len(json.loads(last["names"]))
+            pacing_remaining = 0.0
+            if last and last["response_at"]:
+                pacing_remaining = max(
+                    0.0,
+                    config["delay"]
+                    - (self.wall() - datetime.fromisoformat(last["response_at"])).total_seconds(),
+                )
             meta.update(
                 manifest=manifest,
                 remaining_candidates=c["valid"] - c["excluded"],
@@ -331,6 +350,10 @@ class Prefilter:
                 output_directory=str(self.directory / "exports"),
                 estimated_pacing_seconds=max(0, budget - 1) * config["delay"],
                 estimate_note="Pacing lower bound; excludes response, import, disk and user review time",
+                last_request=last_request,
+                pacing_remaining_seconds=pacing_remaining,
+                provider_blocked=RobloxActivity(self.database).block.exists(),
+                timing_policy_current=manifest["policy"] == policy(),
             )
             meta["samples"] = [
                 dict(r)
@@ -493,6 +516,8 @@ class Prefilter:
                 if len(pending) > 1:
                     raise ValueError("More than one unfinished request; technical review required")
                 for request in pending:
+                    # A killed process may not have checkpointed the last request's wall time.
+                    meta["phases"][request["phase"]]["elapsed_incomplete"] = True
                     if request["evidence"] is None:
                         for name in json.loads(request["names"]):
                             row = db.execute("SELECT * FROM names WHERE key=?", (name.casefold(),)).fetchone()

@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .roblox_activity import RobloxActivity
 from .roblox_prefilter import Prefilter
+from .roblox_prefilter_estimates import calculate, duration_text
 from .ui_cards import Card, CardGrid, Disclosure, icon
 
 STATE_LABELS = {
@@ -49,6 +51,7 @@ class PrefilterPanel(QWidget):
         self.busy = self.closing = False
         self.service = None
         self.snapshot = None
+        self.shared_restriction = False
         self.last_update = 0.0
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="roblox-prefilter")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -66,6 +69,11 @@ class PrefilterPanel(QWidget):
         heading.setWordWrap(True)
         heading.setObjectName("heading")
         layout.addWidget(heading)
+        self.restriction_notice = QLabel()
+        self.restriction_notice.setObjectName("notice")
+        self.restriction_notice.setWordWrap(True)
+        self.restriction_notice.hide()
+        layout.addWidget(self.restriction_notice)
         root_layout = layout
         self.steps_area = QScrollArea()
         self.steps_area.setWidgetResizable(True)
@@ -115,12 +123,27 @@ class PrefilterPanel(QWidget):
         form.addRow("الأسماء في كل طلب Bulk", self.batch)
         form.addRow("حد التجربة الأولية: أسماء صالحة فريدة", self.pilot_size)
         self.steps["config"].addLayout(form)
+        for control in (self.delay, self.batch, self.pilot_size):
+            control.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            control.setMaximumWidth(155)
         self.warning = QLabel("أقل من 10 ثوانٍ تجريبي؛ لم يُثبت استقراره للمسح الطويل.")
         self.warning.setObjectName("simulation")
         self.warning.setWordWrap(True)
         self.delay.valueChanged.connect(lambda v: self.warning.setVisible(v < 10))
         self.warning.hide()
         self.steps["config"].addWidget(self.warning)
+        self.estimates = QLabel()
+        self.estimate_note = QLabel()
+        self.estimate_note.setObjectName("micro")
+        for label in (self.estimates, self.estimate_note):
+            label.setWordWrap(True)
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setMinimumWidth(0)
+            label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            self.steps["config"].addWidget(label)
+        for control in (self.delay, self.batch, self.pilot_size):
+            control.valueChanged.connect(self.refresh_estimates)
+        self.source.textChanged.connect(self.refresh_estimates)
         self.buttons = {}
         for name, label, callback in (
             ("file", "اختيار TXT / CSV…", self.choose_file),
@@ -169,14 +192,75 @@ class PrefilterPanel(QWidget):
         self.counts.setWordWrap(True)
         self.counts.setTextFormat(Qt.TextFormat.PlainText)
         self.steps["review"].addWidget(self.counts)
-        for label in (explanation, self.status, self.counts, self.warning):
+        for label in (explanation, self.status, self.counts, self.warning, self.restriction_notice):
             label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             label.setMinimumWidth(0)
         self.progress_changed.connect(self.show_progress)
         self.finished.connect(self.done)
         self.controls()
 
+    def refresh_estimates(self, *_):
+        # Cached metadata only: no SQL, source-file reads, provider calls or manifest writes.
+        try:
+            model = calculate(
+                self.delay.value(),
+                self.batch.value(),
+                self.pilot_size.value(),
+                self.snapshot,
+                provider_blocked=self.shared_restriction,
+            )
+        except (ValueError, TypeError, KeyError, OverflowError):
+            self.calculation = None
+            self.estimates.setText("التقدير غير متاح؛ راجع الإعدادات وبيانات التوقيت.")
+            self.estimate_note.clear()
+            return
+        self.calculation = model
+        remaining = model["remaining_requests"]
+        remaining_text = f"{remaining:,}" if remaining is not None else "غير معلوم قبل الاستيراد"
+        observed = model["observed_names_per_minute"]
+        observed_text = f"{observed:,.2f} اسم/دقيقة" if observed is not None else "غير متاح بتوقيت موثوق"
+        self.estimates.setText(
+            f"نظريًا: {model['names_per_minute']:,.2f} اسم/دقيقة • {model['names_per_hour']:,.2f} اسم/ساعة\n"
+            f"طلبات الباقي: {remaining_text} • مدته النظرية: {duration_text(model['remaining_seconds'])}\n"
+            f"التجربة المتبقية: {model['pilot_requests']:,} طلبًا • {duration_text(model['pilot_seconds'])}\n"
+            f"مرصود لكل الأسماء المعالجة، بما فيها المجهول: {observed_text}"
+        )
+        measured = model["latency_source"] == "measured_safe_responses"
+        source = (
+            f"زمن الرد: متوسط {model['latency_seconds']:.3f}ث من {model['latency_samples']:,} ردود آمنة."
+            if measured
+            else f"افتراض توضيحي لزمن الرد {model['latency_seconds']:g}ث؛ ليس قياسًا."
+        )
+        scope = "" if model["scope_complete"] else " عدد الملف غير مكتمل حتى ينتهي الاستيراد."
+        blocked = (
+            " التشغيل محظور؛ الأرقام افتراضية فقط." if model["restricted"] or model["review_required"] else ""
+        )
+        self.estimate_note.setText(
+            source + scope + blocked + " يشمل الرد والفاصل المتسلسل والدفعات الجزئية عند حدود الأطوار؛ "
+            "لا يشمل الاستيراد والتصدير ومعالجة القرص ومراجعة المستخدم أو قيودًا لاحقة. "
+            "عند فتح عملية تُستخدم إعداداتها المحفوظة، وهذه تقديرات عند آخر تحديث وليست ضمانًا."
+        )
+
     def controls(self):
+        marker = RobloxActivity(self.owner.repo.store.path).block
+        self.shared_restriction = marker.exists()
+        if self.shared_restriction and self.snapshot is None:
+            reason = "قيد Bulk محفوظ"
+            try:
+                with marker.open("rb") as stream:
+                    raw = stream.read(256).decode("ascii")
+                if raw and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_:" for c in raw):
+                    reason = raw
+            except (OSError, UnicodeError):
+                pass
+            self.restriction_notice.setText(
+                "توقف وقائي محفوظ: "
+                + reason
+                + ". التشغيل محظور. افتح العملية لمراجعة الدليل؛ لا يُرفع القيد تلقائيًا أو بتغيير السرعة."
+            )
+            self.restriction_notice.show()
+        elif self.shared_restriction:
+            self.restriction_notice.show()
         for key, button in self.buttons.items():
             button.setEnabled(
                 not self.busy and not self.closing and (key in ("file", "open") or self.service is not None)
@@ -193,7 +277,9 @@ class PrefilterPanel(QWidget):
                     eligible &= self.snapshot["phases"].get("pilot", {}).get("state") == "Completed"
                 state = self.snapshot["phases"].get(phase, {}).get("state", "Ready")
                 eligible &= state in ("Ready", "Paused") and self.snapshot["unprocessed"] > 0
+                eligible &= not (self.shared_restriction or self.snapshot.get("provider_blocked", False))
                 self.buttons[phase].setEnabled(bool(eligible and not self.busy and not self.closing))
+        self.refresh_estimates()
 
     def new_service(self, directory):
         return Prefilter(
@@ -249,13 +335,26 @@ class PrefilterPanel(QWidget):
         time_note = "حد أدنى " if any(p.get("elapsed_incomplete") for p in phases.values()) else ""
         rate = data["quality"]["full" if "full" in phases else "pilot"]["names_per_minute"]
         rate_note = f"{rate:.2f} اسم/دقيقة" if rate is not None else "غير محسوم"
+        safe = sum(q["safe_responses"] for q in data["quality"].values())
+        last = data.get("last_request") or {}
+        stops = [p["stop_reason"] for p in phases.values() if p["state"] in ("Restricted", "ReviewRequired")]
+        restricted = bool(data.get("provider_blocked")) or any(
+            p["state"] == "Restricted" for p in phases.values()
+        )
+        self.restriction_notice.setVisible(restricted or bool(stops))
+        self.restriction_notice.setText(
+            "توقف وقائي محفوظ: "
+            + (" • ".join(stops) or "قيد Bulk من عملية أخرى")
+            + ". لا إعادة محاولة أو تحرير تلقائي. راجع الدليل وصدّره؛ "
+            "تغيير الفاصل أو فتح التطبيق لا يرفع القيد."
+        )
         self.counts.setText(
             f"مقروءة: {c['imported']:,} • فريدة: {c['unique']:,} • مكررة: {c['duplicates']:,} • "
             f"غير صالحة: {c['invalid']:,}\n"
             f"عولجت: {c['processed']:,} • تطابق حساب مستبعد: {c['excluded']:,} • "
             f"مرشحو الفردي: {data['remaining_candidates']:,}\n"
             f"مجهولة: {c['unknown']:,} • غير آمنة: {c['unsafe']:,} • طلبات فاشلة: {c['failed_requests']:,} • "
-            f"ردود مكتملة: {c['completed_requests']:,}/{c['attempts']:,}\n"
+            f"ردود آمنة: {safe:,} • ردود HTTP مكتملة: {c['completed_requests']:,}/{c['attempts']:,}\n"
             f"زمن حلقات الفحص: {time_note}{elapsed:.1f}ث • المعدل المرصود: {rate_note}\n"
             f"ميزانية الخطة: {data['planned_requests']:,} طلبًا • "
             f"حد الانتظار الأدنى: {data['estimated_pacing_seconds'] / 3600:.2f} ساعة، دون وقت الردود\n"
@@ -268,9 +367,14 @@ class PrefilterPanel(QWidget):
         if not self.busy:
             self.status.setText(
                 data.get("import_error")
-                or "الاستيراد: " + STATE_LABELS.get(data["import_state"], data["import_state"])
+                or (
+                    f"توقف وقائي • {stops[-1] if stops else 'قيد محفوظ'} • {safe:,} ردًا آمنًا / "
+                    f"{c['attempts']:,} طلبًا • أسماء الدفعة الأخيرة: {last.get('affected_names', 0):,}"
+                    if restricted or stops
+                    else "الاستيراد: " + STATE_LABELS.get(data["import_state"], data["import_state"])
+                )
             )
-            self.status.setToolTip("مجلد العملية: " + str(self.service.directory))
+            self.status.setToolTip("مجلد العملية: " + str(self.service.directory) if self.service else "")
         self.controls()
 
     def choose_file(self):
@@ -279,6 +383,7 @@ class PrefilterPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "ملف أسماء كبير — UTF-8", "", "Usernames (*.txt *.csv)")
         if path:
             self.service = self.snapshot = None
+            self.restriction_notice.hide()
             self.counts.clear()
             self.progress.setValue(0)
             self.status.setText("اختير الملف؛ اضبط إعدادات عملية جديدة ثم عاين محليًا.")
@@ -309,6 +414,7 @@ class PrefilterPanel(QWidget):
         if path:
             try:
                 self.service = self.new_service(Path(path))
+                self.snapshot = None
                 value = self.service.manifest()
                 self.source.setText(value["source"]["files"][0]["path"])
                 self.delay.setValue(value["settings"]["delay"])
