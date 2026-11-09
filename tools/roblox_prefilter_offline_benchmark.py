@@ -78,7 +78,7 @@ def main(argv=None):
             last_sample = now
             peak_disk = max(peak_disk, disk_bytes(root))
 
-    started = time.perf_counter()
+    started, cpu_started = time.perf_counter(), time.process_time()
     try:
         source = root / "synthetic.txt"
         before = time.perf_counter()
@@ -89,9 +89,10 @@ def main(argv=None):
         tool = Prefilter(
             root / "run", root / "production-must-not-exist.db", transport=forbidden, updated=observe
         )
-        before = time.perf_counter()
+        before, cpu_before = time.perf_counter(), time.process_time()
         summary = tool.prepare(source)
         report["import_seconds"] = time.perf_counter() - before
+        report["import_cpu_seconds"] = time.process_time() - cpu_before
         assert summary["counts"]["valid"] == summary["counts"]["unique"] == args.rows
         assert summary["counts"]["attempts"] == 0 and summary["import_state"] == "Ready"
         assert not tool.database.exists()
@@ -100,9 +101,10 @@ def main(argv=None):
         report["source_bytes"] = source.stat().st_size
         report["work_disk_after_import_bytes"] = disk_bytes(tool.directory)
         print(json.dumps({"phase": "import_complete", **report}), flush=True)
-        before = time.perf_counter()
+        before, cpu_before = time.perf_counter(), time.process_time()
         output = tool.export(root / "exports")
         report["export_seconds"] = time.perf_counter() - before
+        report["export_cpu_seconds"] = time.process_time() - cpu_before
         state = json.loads((output / "export-state.json").read_bytes())
         assert state["complete"]
         for filename in ("candidates.csv", "candidates.json", "individual-candidates.txt"):
@@ -134,6 +136,7 @@ def main(argv=None):
         observe(True)
         report.update(
             total_seconds=time.perf_counter() - started,
+            process_cpu_seconds=time.process_time() - cpu_started,
             peak_process_bytes=memory_peak(),
             sampled_peak_temporary_disk_bytes=peak_disk,
             final_temporary_disk_bytes=disk_bytes(root),

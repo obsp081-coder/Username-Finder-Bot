@@ -1,4 +1,4 @@
-"""Synthetic 20/21/50/100-name compatibility only; never increases the real limit."""
+"""Synthetic batch compatibility only; never increases the real operational limit."""
 
 import json
 from email.message import Message
@@ -12,8 +12,10 @@ from test_roblox_prefilter import no_live as no_live
 from username_finder import roblox_bulk_protocol as bulk
 from username_finder import roblox_prefilter as prefilter
 from username_finder import roblox_prefilter_transport as transport
+from username_finder.roblox_activity import RobloxActivity
+from username_finder.roblox_prefilter_review import inspect_operation
 
-SIZES = (20, 21, 50, 100, 500, 1000)
+SIZES = (20, 21, 50, 100, 200, 500, 1000)
 
 
 @pytest.fixture
@@ -122,7 +124,10 @@ def test_synthetic_large_batch_durability_export_recovery_without_replay(
     job, synthetic_limit, monkeypatch, size, tmp_path
 ):
     total = size * 2 + 3
-    job.test_source.write_text("\n".join(f"User{i:05}" for i in range(total)), encoding="utf8")
+    job.test_source.write_text(
+        "\n".join(f"User{i:05}" for i in range(total)) + "\nUSER00000\ninvalid-name\n\n",
+        encoding="utf8",
+    )
     pilot = min(size + 1, 200)
     job.prepare(job.test_source, batch_size=size, pilot_names=pilot)
     finish = job._finish
@@ -145,6 +150,7 @@ def test_synthetic_large_batch_durability_export_recovery_without_replay(
     assert len(job.test_calls) == pilot_requests
     result = execute(job, "full")
     assert result["counts"]["excluded"] == total
+    assert result["counts"]["duplicates"] == result["counts"]["invalid"] == 1
     sent = [n for _, request in job.test_calls for n in request["usernames"]]
     assert len(sent) == len(set(sent)) == total
     expected = [size, 1, size, 2] if size < 200 else [200, size, size - 197]
@@ -183,10 +189,66 @@ def test_cross_batch_identity_conflict_revokes_exclusions(job, synthetic_limit, 
     assert len(json.loads((out / "unresolved.json").read_bytes())) == affected
 
 
+@pytest.mark.parametrize("size", SIZES)
+def test_historical_and_missing_records_never_become_current_matches_or_availability(size):
+    names = [f"Research{i:05}" for i in range(size)]
+    rows = [record(n, uid=i + 1) for i, n in enumerate(names[:-1])]
+    rows[0]["name"] = "DifferentCurrentName"
+    mapping, stop = bulk.interpret_bulk(names, response(rows))
+    assert not stop and len(mapping) == size
+    assert mapping[names[0].lower()]["state"] == "HistoricalOrDifferentCurrentName"
+    assert mapping[names[-1].lower()]["state"] == "NoMatchingBulkRecord"
+    assert all(v["state"] not in ("Available", "Taken", "Reserved") for v in mapping.values())
+
+
+@pytest.mark.parametrize("size", (20, 50, 100, 200, 500, 1000))
+@pytest.mark.parametrize("status", (401, 403, 429))
+def test_restriction_after_safe_pilot_keeps_all_prior_evidence_and_never_replays(
+    job,
+    synthetic_limit,
+    size,
+    status,
+):
+    total = 100 + size + 5
+    job.test_source.write_text("\n".join(f"User{i:05}" for i in range(total)), encoding="utf8")
+    job.prepare(job.test_source, batch_size=size, pilot_names=100)
+    calls = []
+    sent = 0
+
+    def fetch(request):
+        nonlocal sent
+        calls.append(request)
+        job.test_clock.at += 0.25
+        if sent >= 100:
+            return response(status=status)
+        sent += len(request["usernames"])
+        return response([record(n, uid=int(n[4:]) + 1) for n in request["usernames"]])
+
+    job.transport = fetch
+    execute(job)
+    result = execute(job, "full")
+    assert result["counts"]["excluded"] == 100
+    assert result["counts"]["unknown"] == size and result["counts"]["failed_requests"] == 1
+    assert result["phases"]["full"]["state"] == "Restricted"
+    assert len(calls[-1]["usernames"]) == size
+    marker = RobloxActivity(job.database).block
+    before_marker = marker.read_bytes()
+    with job.connect(read_only=True) as db:
+        before = [tuple(r) for r in db.execute("SELECT * FROM requests ORDER BY id")]
+    job.recover()
+    assert inspect_operation(job)["restriction_review"]["recovery_decision"] == "Blocked"
+    with pytest.raises(ValueError):
+        execute(job, "full")
+    with job.connect(read_only=True) as db:
+        assert [tuple(r) for r in db.execute("SELECT * FROM requests ORDER BY id")] == before
+    assert marker.read_bytes() == before_marker
+    assert len(calls) == (100 + size - 1) // size + 1
+
+
 def test_selection_range_and_operational_guard_remain_distinct():
     assert prefilter.settings(batch_size=20)["batch_size"] == 20
     assert prefilter.VERIFIED_OPERATIONAL_BATCH == 20
-    for value in (21, 50, 100, 500, 1000):
+    for value in (21, 50, 100, 200, 500, 1000):
         assert prefilter.settings(batch_size=value)["batch_size"] == value
     with pytest.raises(ValueError):
         prefilter.settings(batch_size=1001)

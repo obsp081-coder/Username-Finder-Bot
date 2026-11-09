@@ -154,8 +154,9 @@ def test_cli_report_is_read_only_and_does_not_open_production_database(job, tmp_
     assert target.read_bytes() == original and not job.test_calls
 
 
-@pytest.mark.parametrize("size", [20, 50, 100, 500, 1000])
-def test_large_mock_transport_timeout_is_not_retried(size):
+@pytest.mark.parametrize("size", [20, 50, 100, 200, 500, 1000])
+@pytest.mark.parametrize("error", [TimeoutError, ConnectionResetError])
+def test_large_mock_transport_failure_is_not_retried(size, error):
     calls = []
 
     class Connection:
@@ -169,7 +170,7 @@ def test_large_mock_transport_timeout_is_not_retried(size):
             calls.append(json.loads(body))
 
         def getresponse(self):
-            raise TimeoutError("injected")
+            raise error("injected")
 
         def close(self):
             self.sock = None
@@ -179,7 +180,8 @@ def test_large_mock_transport_timeout_is_not_retried(size):
     names = [f"Research{i:05}" for i in range(size)]
     result = session({"kind": "bulk", "url": bulk.BULK_URL, "method": "POST", "usernames": names})
     assert len(calls) == 1 and calls[0]["usernames"] == names
-    assert result.error == "timeout" and not result.complete and session.connection is None
+    expected = "timeout" if error is TimeoutError else "network_error"
+    assert result.error == expected and not result.complete and session.connection is None
     mapping, stop = bulk.interpret_bulk(names, result)
     assert stop and len(mapping) == size
     assert all(r["state"] not in ("Available", "Taken", "Reserved") for r in mapping.values())

@@ -104,3 +104,86 @@ def duration_text(seconds):
     if seconds < 86400:
         return f"{seconds / 3600:,.2f} ساعة"
     return f"{seconds / 86400:,.2f} يوم"
+
+
+def capacity_plan(
+    names,
+    batch_size=20,
+    delay=10,
+    *,
+    latency=0.5,
+    local_seconds_per_request=0,
+    hours=24,
+    pilot_names=100,
+    safe_outcome_fraction=1,
+):
+    """Offline feasibility arithmetic, never permission or evidence of provider capacity.
+
+    Uses the existing phase-partitioned request budget. Local processing is separate
+    from HTTP latency; no final delay, retries, outage guesses or registration claims.
+    Fractional safe outcomes leave unresolved names without scheduling rechecks.
+    """
+    names = _nonnegative(names)
+    if not names or names > 2**63 - 1:
+        raise ValueError("Planning count must be a positive signed 64-bit integer")
+    for value, positive in ((latency, False), (local_seconds_per_request, False), (hours, True)):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            or (positive and value == 0)
+        ):
+            raise ValueError("Invalid timing assumption")
+    if (
+        isinstance(safe_outcome_fraction, bool)
+        or not isinstance(safe_outcome_fraction, (int, float))
+        or not math.isfinite(safe_outcome_fraction)
+        or not 0 <= safe_outcome_fraction <= 1
+    ):
+        raise ValueError("Safe-outcome fraction must be between zero and one")
+    config = settings(delay, batch_size, pilot_names)
+    snapshot = {
+        "manifest": {"settings": config},
+        "counts": {"valid": names},
+        "phases": {},
+        "import_state": "Ready",
+    }
+    budget = calculate(delay, batch_size, pilot_names, snapshot)
+    count = budget["planned_requests"]
+    target = hours * 3600
+    elapsed = count * (latency + local_seconds_per_request) + max(0, count - 1) * delay
+    if not all(math.isfinite(v) for v in (target, elapsed)) or target <= 0 or elapsed <= 0:
+        raise ValueError("Timing assumptions exceed the finite planning range")
+    one_phase = (names + batch_size - 1) // batch_size
+    max_gap = (target - count * (latency + local_seconds_per_request)) / (count - 1) if count > 1 else None
+    safe_names = min(names, int(names * safe_outcome_fraction))
+    rates = (names / target, count / target, names / elapsed, safe_names / elapsed, target / count)
+    if not all(math.isfinite(rate) for rate in rates):
+        raise ValueError("Derived rates exceed the finite planning range")
+    return {
+        "names": names,
+        "settings": config,
+        "unpartitioned_requests": one_phase,
+        "planned_requests": count,
+        "phase_boundary_extra_requests": count - one_phase,
+        "required_names_per_second": rates[0],
+        "required_requests_per_second": rates[1],
+        "average_cycle_budget_seconds": rates[4],
+        "latency_assumption_seconds": latency,
+        "local_processing_assumption_seconds": local_seconds_per_request,
+        "maximum_post_response_delay_seconds": max_gap,
+        "modeled_elapsed_seconds": elapsed,
+        "modeled_names_per_second": rates[2],
+        "modeled_safe_names": safe_names,
+        "modeled_unresolved_names": names - safe_names,
+        "modeled_safe_names_per_second": rates[3],
+        "time_budget_met_if_uninterrupted": elapsed <= target,
+        "all_names_have_safe_outcomes_in_model": safe_outcome_fraction == 1,
+        "within_operational_batch_guard": budget["batch_supported"],
+        "provider_capacity_verified": False,
+        "dispatch_authorized": False,
+        "automatic_retries": 0,
+        "assumptions": "Uninterrupted sequential model; excludes manual review, import/export and outages. "
+        "A restriction stops the actual runner. Safe outcomes are not registration availability.",
+    }

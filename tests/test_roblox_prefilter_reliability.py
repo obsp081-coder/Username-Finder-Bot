@@ -199,4 +199,6 @@ def test_offline_benchmark_small_run_is_reproducible_and_network_free(tmp_path):
     assert report["rows"] == 100 and report["status"] == "complete"
     assert report["provider_request_attempts"] == 0
     assert report["export_files"] == 12 and report["calculation_iterations"] == 10_000
+    assert report["import_cpu_seconds"] >= 0 and report["export_cpu_seconds"] >= 0
+    assert report["process_cpu_seconds"] >= report["import_cpu_seconds"]
     assert not (output / "production-must-not-exist.db").exists()
