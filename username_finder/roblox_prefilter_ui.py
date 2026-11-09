@@ -414,11 +414,27 @@ class PrefilterPanel(QWidget):
         if review:
             evidence = review["last_response_evidence"] or {}
             headers = evidence.get("headers", {})
+            rate = review.get("rate_limit_advisory", {})
+            rate_labels = {
+                "CooldownPendingReview": "مهلة موثقة؛ المراجعة لازمة",
+                "CooldownReviewed": "مهلة موثقة؛ سُجلت المراجعة دون إذن إرسال",
+                "AwaitingProviderAuthorization": "انتهت المهلة؛ إذن الموفر ما زال مطلوبًا",
+                "FallbackReviewRequired": "مهلة احتياطية محلية؛ ترويسة الانتظار غير موثقة",
+                "RepeatedRateLimitReview": "تقييد متكرر؛ توقف ومراجعة",
+                "ExcessiveWaitReview": "مهلة كبيرة أو غير قابلة للحساب؛ مراجعة يدوية",
+                "UnsafeEvidenceReview": "دليل غير مكتمل أو غير آمن؛ مراجعة",
+                "UnfinishedDeliveryReview": "طلب غير محسوم أو رد غير مطبق؛ لا إعادة إرسال",
+                "RestrictedPendingReview": "قيد محفوظ؛ المراجعة لازمة",
+                "ReadyForSeparateAuthorization": "مراجعة فقط؛ بدء العمل يتطلب تفويضًا منفصلًا",
+            }
             self.review_details.setText(
                 f"القيد المحفوظ: {review['shared_restriction_reason'] or 'راجع حالة الأطوار'}\n"
                 f"آخر رد: HTTP {evidence.get('status', '—')} • {evidence.get('response_at', '—')}\n"
                 f"Retry-After: {headers.get('retry-after', 'غير موجود')} • "
                 f"إعادة ضبط الحصة: {headers.get('x-ratelimit-reset', 'غير موجود')}\n"
+                f"حالة المهلة: {rate_labels.get(rate.get('state'), 'غير موثقة')}\n"
+                f"لا طلب قبل: {rate.get('not_before') or 'غير موثق'} • "
+                f"التباعد المقترح فقط: {rate.get('proposed_interval_seconds') or '—'} ثانية (غير مطبق)\n"
                 f"توافق بصمة المصدر: {'مطابقة' if review['policy_matches'] else 'غير مثبت؛ استئناف محظور'}\n"
                 + review["explanation_ar"]
             )

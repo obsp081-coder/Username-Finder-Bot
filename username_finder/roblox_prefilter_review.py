@@ -5,6 +5,7 @@ import json
 
 from . import roblox_bulk_protocol as bulk
 from .roblox_activity import RobloxActivity
+from .roblox_cooldown import advisory, utc
 from .roblox_prefilter import VERIFIED_OPERATIONAL_BATCH, policy
 
 
@@ -49,10 +50,22 @@ def inspect_operation(service):
                 "affected_names": len(json.loads(row["names"])),
                 "body_sha256": evidence["body_sha256"],
                 "body_integrity_verified": intact,
+                "response_complete": evidence.get("complete") is True,
+                "transport_error": evidence.get("error", "legacy_transport_state_unverified"),
+                "challenge": evidence.get("challenge", True),
                 "headers": {
                     k: str(v)[:512] for k, v in evidence["headers"].items() if k in bulk.SAFE_HEADERS
                 },
             }
+            # Parse the complete Retry-After value, not the bounded display preview.
+            full_headers = evidence["headers"]
+        else:
+            full_headers = {}
+        streak = 0
+        for previous in db.execute("SELECT stop FROM requests ORDER BY id DESC LIMIT 2"):
+            if previous["stop"] != "http_429":
+                break
+            streak += 1
     blockers = []
     if marker.exists():
         blockers.append("shared_provider_restriction_preserved")
@@ -66,6 +79,34 @@ def inspect_operation(service):
         blockers.append("raw_evidence_integrity_unverified")
     if manifest["settings"]["batch_size"] > VERIFIED_OPERATIONAL_BATCH:
         blockers.append("unverified_batch_size_dispatch_disabled")
+    previous_plan = {}
+    previous_deadlines = []
+    for review in reviews:
+        data = json.loads(review["data"])
+        candidate = data.get("rate_limit_advisory", {})
+        if candidate.get("version") == 1 and candidate.get("not_before"):
+            try:
+                previous_deadlines.append(utc(candidate["not_before"]))
+            except (TypeError, ValueError):
+                pass  # Invalid audit hints never authorize sending or alter a provider restriction.
+        if (
+            not previous_plan
+            and evidence_report
+            and candidate.get("version") == 1
+            and candidate.get("request_id") == evidence_report["request_id"]
+            and candidate.get("body_sha256") == evidence_report["body_sha256"]
+        ):
+            previous_plan = candidate
+    rate = advisory(
+        dict(evidence_report, headers=full_headers) if evidence_report else None,
+        now=service.wall(),
+        interval=manifest["settings"]["delay"],
+        streak=max(1, streak),
+        previous_not_before=max(previous_deadlines).isoformat() if previous_deadlines else None,
+        review_recorded=previous_plan.get("review_recorded", False),
+        blockers=blockers,
+        pending=bool(pending),
+    )
     report = {
         "version": 1,
         "manifest_fingerprint": manifest["fingerprint"],
@@ -85,6 +126,7 @@ def inspect_operation(service):
             "لا توجد هنا أدلة مستقلة ترفع قيد الموفر، ولا زر تحرير أو طلب تحقق حي. "
             "تبقى النتائج والأدلة قابلة للعرض والتصدير؛ أي تحقق شبكي لاحق يحتاج تفويضًا منفصلًا."
         ),
+        "rate_limit_advisory": rate,
     }
     return dict(snapshot, restriction_review=report)
 
@@ -104,6 +146,9 @@ def record_review(service, fingerprint):
                     "decision": "Evidence reviewed; no unlock, network authorization or reclassification",
                     "resume_blockers": snapshot["restriction_review"]["resume_blockers"],
                     "last_response_evidence": snapshot["restriction_review"]["last_response_evidence"],
+                    "rate_limit_advisory": dict(
+                        snapshot["restriction_review"]["rate_limit_advisory"], review_recorded=True
+                    ),
                 },
             )
             service.save(db, service.meta(db))
