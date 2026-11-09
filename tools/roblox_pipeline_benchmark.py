@@ -7,7 +7,9 @@ Generated TLS keys/databases are temporary and are never part of the report.
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
+import hashlib
 import http.client
 import json
 import math
@@ -26,6 +28,7 @@ import time
 import urllib.parse
 from collections import Counter, defaultdict
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -251,6 +254,7 @@ def profile(store, repo, runner):
         for name in names:
             timed(owner, name, ("night." if owner is runner.night else "repo.") + name)
     timed(protocol, "classify", "classification")
+    timed(protocol, "request_url", "request_encoding")
     import username_finder.roblox_runner as runner_module
 
     timed(runner_module, "result_for", "evidence_serialization")
@@ -429,6 +433,309 @@ def connection_profile():
         http.client.HTTPSConnection.connect = original
 
 
+@contextmanager
+def no_network():
+    """Semantic measurements forbid even loopback sockets; fail before DNS/dispatch."""
+    original = socket.socket.connect, socket.socket.connect_ex, socket.create_connection
+
+    def deny(*args, **kwargs):
+        raise AssertionError("Semantic benchmark forbids all network dispatch")
+
+    socket.socket.connect = socket.socket.connect_ex = socket.create_connection = deny
+    try:
+        yield
+    finally:
+        socket.socket.connect, socket.socket.connect_ex, socket.create_connection = original
+
+
+def semantic_fixtures():
+    def reply(code=0, message="Username is valid", **changes):
+        values = dict(
+            status=200,
+            body=json.dumps(dict(code=code, message=message)).encode(),
+            headers={"content-type": "application/json"},
+            elapsed=0.001,
+        )
+        values.update(changes)
+        return protocol.Response(**values)
+
+    return {
+        "available": reply(),
+        "taken": reply(1, "Username is already in use"),
+        "reserved": reply(12, "Contains reserved username"),
+        "moderation": reply(2, "Moderation rejection"),
+        "invalid": reply(7, "Invalid characters"),
+        "undocumented": reply(99, "Unsupported result"),
+        "malformed": reply(body=b"not json"),
+        "duplicate_key": reply(body=b'{"code":0,"code":1,"message":"Taken"}'),
+        "contradiction": reply(0, "Username is already in use"),
+        "ambiguous": reply(0, "string"),
+        "schema": reply(body=b'{"errors":[]}'),
+        "incomplete": reply(complete=False),
+        "challenge": reply(challenge=True),
+        "rate_limit": reply(status=429, headers={"content-type": "application/json", "retry-after": "60"}),
+        "forbidden": reply(status=403),
+        "unauthorized": reply(status=401),
+        "timeout": reply(status=None, body=b"", error="timeout", complete=False),
+        "network_error": reply(status=None, body=b"", error="network_error", complete=False),
+        "retry_after_200": reply(headers={"content-type": "application/json", "retry-after": "60"}),
+        "html": reply(headers={"content-type": "text/html"}),
+    }
+
+
+def _json_decodes(response):
+    try:
+        json.loads(
+            response.body.decode("utf-8"),
+            object_pairs_hook=protocol.unique_object,
+            parse_constant=protocol.reject_constant,
+        )
+        return True
+    except (UnicodeError, ValueError, RecursionError):
+        return False
+
+
+def semantic_case(folder, *, count=1000, night=False, sequence=None, cancel_after=None, uncertain=False):
+    """Real runner/FULL-WAL storage, fake responses and clock; no production data or GUI."""
+    if type(count) is not int or not 2 <= count <= 5000:
+        raise ValueError("Semantic sample must contain 2-5000 names")
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=False)
+    total_started, total_cpu = time.perf_counter(), time.process_time()
+    fixtures = semantic_fixtures()
+    pattern = sequence or ("available", *(["taken"] * 6), "reserved", "moderation", "invalid")
+    if not pattern or set(pattern) - fixtures.keys():
+        raise ValueError("Unknown semantic fixture")
+    commits, requests, observed = [], [], []
+    timings, statements = defaultdict(list), Counter()
+    at, modeled_waits = [0.0], []
+
+    def clock():
+        return datetime(2030, 1, 1, tzinfo=UTC) + timedelta(seconds=at[0])
+
+    def open_store():
+        original = sqlite3.connect
+        sqlite3.connect = lambda *a, **kw: original(*a, factory=MeasuredConnection, **kw)
+        try:
+            store = Store(folder / "semantic.db")
+        finally:
+            sqlite3.connect = original
+        store.db.commit_times = commits
+        return store, RobloxStore(store)
+
+    store, repo = open_store()
+    try:
+        default_interval = repo.preferred_interval()
+        repo.set_preferred_interval(5 if cancel_after else 0)  # This temporary DB only.
+        identity = repo.create_run((f"Bench{i:08d}" for i in range(count)), skip=False)
+        OvernightStore(store, "Roblox").enable(identity, night)
+        setup_seconds = time.perf_counter() - total_started
+        logical_before = (
+            store.db.execute("PRAGMA page_count").fetchone()[0]
+            * store.db.execute("PRAGMA page_size").fetchone()[0]
+        )
+        commits.clear()
+        cancellation_at = [None]
+
+        def fetch(url):
+            index = int(urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["Username"][0][-8:])
+            requests.append(index)
+            result = fixtures[pattern[index % len(pattern)]]
+            observed.append(result)
+            at[0] += 0.001  # Modeled latency, never sleep or a measured HTTP latency.
+            return result
+
+        def run_stage(cancel=False):
+            def wait(seconds):
+                modeled_waits.append(seconds)
+                if cancel:
+                    cancellation_at[0] = time.perf_counter()
+                    runner.cancel.set()
+                    return True
+                at[0] += seconds
+                return False
+
+            runner = RobloxRunner(repo, fetcher=fetch, wait=wait, clock=clock)
+            started, cpu = time.perf_counter(), time.process_time()
+            with profile(store, repo, runner) as (components, sql):
+                runner.run(identity)
+            wall, cpu = time.perf_counter() - started, time.process_time() - cpu
+            for label, values in components.items():
+                timings[label].extend(values)
+            statements.update(sql)
+            return wall, cpu
+
+        recovery_seconds, cancellation_seconds = None, None
+        initial_state = None
+        if uncertain:
+            repo.start(identity)
+            task = repo.claim_next(identity)
+            assert task["username"] == "Bench00000000"
+        run_wall = run_cpu = 0.0
+        if not uncertain:
+            run_wall, run_cpu = run_stage(cancel=bool(cancel_after))
+            initial_state = repo.progress(identity)["state"]
+        if uncertain or cancel_after:
+            if cancellation_at[0] is not None:
+                cancellation_seconds = time.perf_counter() - cancellation_at[0]
+            store.close()
+            before_requests = len(requests)
+            started = time.perf_counter()
+            store, repo = open_store()
+            repo.recover()
+            recovery_seconds = time.perf_counter() - started
+            assert len(requests) == before_requests  # Recovery is SQL only.
+            wall, cpu = run_stage()  # Explicit mocked resume; no recovered intent is replayed.
+            run_wall += wall
+            run_cpu += cpu
+        final = repo.progress(identity)
+        classifications = repo.counts()
+        accepted = sum(v for k, v in classifications.items() if k != "Unknown")
+        assert len(requests) == len(set(requests))
+        if uncertain:
+            assert 0 not in requests
+        assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert store.db.execute("PRAGMA synchronous").fetchone()[0] == 2
+        evidence_bytes = 0
+        for row in store.db.execute("SELECT evidence FROM roblox_checks"):
+            evidence_bytes += len(row[0].encode("utf-8"))
+            evidence = json.loads(row[0])
+            assert evidence["preliminary"] and evidence["independently_verified_classification"] == "Unknown"
+            assert (
+                hashlib.sha256(base64.b64decode(evidence["raw_base64"])).hexdigest() == evidence["raw_sha256"]
+            )
+        disk_before_export = sum(p.stat().st_size for p in folder.iterdir() if p.is_file())
+        started = time.perf_counter()
+        repo.export_csv(folder / "evidence.csv", history=True)
+        export_seconds = time.perf_counter() - started
+        during_bytes = sum(p.stat().st_size for p in folder.iterdir() if p.is_file())
+        report = {
+            "queued_names": count,
+            "mock_dispatches": len(requests),
+            "unique_mock_names": len(set(requests)),
+            "received_http_responses": sum(r.status is not None for r in observed),
+            "complete_http_responses": sum(r.status is not None and r.complete for r in observed),
+            "http_200": sum(r.status == 200 for r in observed),
+            "json_bodies_decoded": sum(_json_decodes(r) for r in observed),
+            "valid_preliminary_api_indications": accepted,
+            "independently_verified": 0,
+            "classifications": classifications,
+            "unknown": classifications.get("Unknown", 0),
+            "queue_counts": final["counts"],
+            "final_state": final["state"],
+            "initial_state": initial_state,
+            "control_blocked": bool(repo.control().get("blocked")),
+            "default_interval_seconds": default_interval,
+            "temporary_interval_seconds": 5 if cancel_after else 0,
+            "modeled_wait_seconds": sum(modeled_waits),
+            "night": night,
+            "setup_seconds": setup_seconds,
+            "run_seconds": run_wall,
+            "run_cpu_seconds": run_cpu,
+            "valid_indications_per_local_run_second": accepted / run_wall if run_wall else None,
+            "components": {k: distribution(v) for k, v in timings.items()},
+            "sqlite_commit": distribution(commits),
+            "sql_statements": dict(statements),
+            "logical_database_before_bytes": logical_before,
+            "logical_database_after_bytes": store.db.execute("PRAGMA page_count").fetchone()[0]
+            * store.db.execute("PRAGMA page_size").fetchone()[0],
+            "request_target_ascii_bytes": sum(
+                len(protocol.request_url(f"Bench{i:08d}").split(".com", 1)[1].encode("ascii"))
+                for i in requests
+            ),
+            "response_body_bytes": sum(len(r.body) for r in observed),
+            "evidence_utf8_bytes": evidence_bytes,
+            "disk_before_export_bytes": disk_before_export,
+            "sampled_directory_bytes": during_bytes,
+            "export_seconds": export_seconds,
+            "recovery_seconds": recovery_seconds,
+            "cancellation_cleanup_seconds": cancellation_seconds,
+            "uncertain_claims_not_dispatched_by_fixture": int(uncertain),
+            "provider_requests": 0,
+            "latency_measured": False,
+            "durability": "WAL/FULL",
+            "artifacts": str(folder),
+        }
+    finally:
+        store.close()
+    report.update(
+        total_seconds=time.perf_counter() - total_started,
+        total_cpu_seconds=time.process_time() - total_cpu,
+        memory=memory(),
+        final_directory_bytes=sum(p.stat().st_size for p in folder.iterdir() if p.is_file()),
+    )
+    return report
+
+
+def individual_capacity(local_seconds):
+    """Assumptions only; concurrency is arithmetic, never a dispatch setting."""
+    names, seconds = 2_000_000, 86400
+    return {
+        "required_valid_indications_per_second": names / seconds,
+        "hypothetical_submission_rates": [
+            {
+                "requests_per_second": rate,
+                "unknown_fraction": unknown,
+                "downtime_hours": 1,
+                "hours_for_two_million_submissions": names / rate / 3600 + 1,
+                "unknown_names_after_two_million_submissions": int(names * unknown),
+                "hours_for_two_million_valid_indications_if_same_yield_persists": names
+                / (rate * (1 - unknown))
+                / 3600
+                + 1,
+            }
+            for rate in (5, 10, 20, 25, 30, 50)
+            for unknown in (0, 0.01, 0.05, 0.1)
+        ],
+        "assumed_latency_and_concurrency": [
+            {
+                "http_latency_seconds": latency,
+                "hypothetical_concurrency": concurrency,
+                "additive_local_seconds_per_name": local_seconds,
+                "post_response_delay_seconds": gap,
+                "modeled_hours": (names * (latency / concurrency + local_seconds) + max(0, names - 1) * gap)
+                / 3600,
+            }
+            for latency in (0.05, 0.1, 0.45, 0.5)
+            for concurrency in (1, 4, 8, 16)
+            for gap in ((0, 5) if concurrency == 1 else (0,))
+        ],
+        "note": "No provider limit or accuracy assumed proven. Additive local cost is from a short "
+        "instrumented sample; no contention, throttling or live concurrency measured. "
+        "Positive-delay rows add costs conservatively: real post-response work can overlap the stored gap. "
+        "Yield scenarios do not authorize retries.",
+    }
+
+
+def semantic_suite(folder, count, case):
+    with no_network():
+        if case in ("semantic_plain", "semantic_night"):
+            return semantic_case(folder, count=count, night=case == "semantic_night")
+        scenarios = {
+            "rate_limit": ("taken", "rate_limit", "taken"),
+            "challenge": ("taken", "challenge", "taken"),
+            "forbidden": ("taken", "forbidden", "taken"),
+            "unauthorized": ("taken", "unauthorized", "taken"),
+            "unknown_streak": ("malformed", "undocumented", "taken"),
+            "transport_unknowns": ("timeout", "incomplete", "taken"),
+            "isolated_network_failure": ("network_error", "taken"),
+            "contradiction": ("contradiction", "ambiguous", "taken"),
+            "retry_after_200": ("taken", "retry_after_200", "taken"),
+            "night_unknown": ("taken", "schema", "taken"),
+        }
+        results = {
+            name: semantic_case(
+                Path(folder) / name, count=len(sequence), sequence=sequence, night=name == "night_unknown"
+            )
+            for name, sequence in scenarios.items()
+        }
+        results["cancel_resume"] = semantic_case(Path(folder) / "cancel_resume", count=4, cancel_after=1)
+        results["uncertain_recovery"] = semantic_case(
+            Path(folder) / "uncertain_recovery", count=3, uncertain=True
+        )
+        return {"scenarios": results, "provider_requests": 0}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--label", required=True)
@@ -438,6 +745,11 @@ def main():
     parser.add_argument("--queue", type=int, default=100000)
     parser.add_argument("--case", action="append", help="Run only named cases; repeat for multiple cases")
     parser.add_argument("--transport", choices=("legacy", "persistent"), default="legacy")
+    parser.add_argument(
+        "--semantic-offline",
+        action="store_true",
+        help="Real parser/storage with fake responses; all sockets forbidden",
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", args.label):
         parser.error("Label must contain only letters, digits, underscores or hyphens")
@@ -447,6 +759,39 @@ def main():
     path = args.output / (args.label + ".json")
     if path.exists():
         parser.error("Refusing to overwrite earlier measurements")
+    if args.semantic_offline:
+        cases = args.case or ["semantic_plain", "semantic_night", "semantic_failures"]
+        if not 2 <= args.count <= 5000 or set(cases) - {
+            "semantic_plain",
+            "semantic_night",
+            "semantic_failures",
+        }:
+            parser.error("Semantic cases require 2-5000 names and supported semantic case names")
+        report = {
+            "kind": "offline_synthetic_not_provider_capacity",
+            "source": str(SOURCE),
+            "contract": dict(
+                endpoint=protocol.ENDPOINT,
+                method="GET",
+                Birthday=protocol.BIRTHDAY,
+                Context=protocol.CONTEXT,
+                concurrency=1,
+            ),
+            "cases": {},
+        }
+        for case in cases:
+            report["cases"][case] = semantic_suite(args.output / (args.label + "-" + case), args.count, case)
+            if case == "semantic_plain":
+                result = report["cases"][case]
+                report["capacity_assumptions"] = individual_capacity(
+                    result["run_seconds"] / result["mock_dispatches"]
+                )
+            with path.open("w", encoding="utf-8") as stream:
+                json.dump(report, stream, indent=2)
+                stream.flush()
+                os.fsync(stream.fileno())
+        print(path)
+        return
     report = {
         "label": args.label,
         "python": sys.version,
