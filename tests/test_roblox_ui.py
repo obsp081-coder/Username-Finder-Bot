@@ -12,6 +12,95 @@ from username_finder.roblox_storage import RobloxStore
 from username_finder.storage import Store
 
 
+def test_restriction_status_and_cancelled_confirmation_never_dispatch(window, monkeypatch):
+    panel = window.roblox
+    before = panel.repo.store.db.total_changes
+    panel.restriction_button.click()
+    assert panel.restriction_button.text() == "تحقق من القيد"
+    assert panel.diagnostic_button.isEnabled() and "غير معروفة" in panel.restriction_label.text()
+    assert panel.repo.store.db.total_changes == before
+    monkeypatch.setattr(roblox_ui.QInputDialog, "getText", lambda *args: ("DiagnosticName", True))
+    monkeypatch.setattr(panel, "_confirm", lambda _: False)
+    panel.start_diagnostic()
+    assert not panel.test_calls and not panel.repo.runs()
+
+
+def test_historical_restriction_is_read_only_and_cannot_diagnose(window, monkeypatch):
+    from username_finder.roblox_activity import RobloxActivity
+
+    panel = window.roblox
+    marker = RobloxActivity(panel.repo.store.path).block
+    marker.write_bytes(b"http_429")
+    monkeypatch.setattr(roblox_ui.QInputDialog, "getText", lambda *args: pytest.fail("Blocked"))
+    panel.check_restriction()
+    assert not panel.diagnostic_button.isEnabled()
+    assert "تاريخي" in panel.restriction_label.text() and "HTTP 429" in panel.restriction_label.text()
+    panel.start_diagnostic()
+    assert marker.read_bytes() == b"http_429" and not panel.test_calls and not panel.repo.runs()
+
+
+def test_restriction_controls_remain_accessible_in_all_roblox_modes(window):
+    panel = window.roblox
+    for mode in range(3):
+        panel.checking_mode.setCurrentIndex(mode)
+        assert panel.restriction_button.isVisibleTo(panel)
+        panel.check_restriction()
+        assert panel.restriction_label.isVisibleTo(panel)
+    assert not panel.test_calls
+
+
+def test_confirmed_single_diagnostic_preserves_inputs_and_selected_operation(window, qtbot, monkeypatch):
+    panel = window.roblox
+    panel.manual.setPlainText("PreservedInput")
+    selected = panel.current_run
+    speed = panel.speed.currentData()
+    monkeypatch.setattr(roblox_ui.QInputDialog, "getText", lambda *args: ("DiagnosticName", True))
+    confirmations = []
+    monkeypatch.setattr(panel, "_confirm", lambda text: (confirmations.append(text), True)[1])
+    panel.start_diagnostic()
+    wait_done(qtbot, panel)
+    assert panel.test_calls == ["DiagnosticName"] and len(confirmations) == 1
+    assert "HTTP 200" in panel.restriction_label.text() and "لا يثبت" in panel.restriction_label.text()
+    assert panel.manual.toPlainText() == "PreservedInput" and panel.current_run == selected
+    assert panel.speed.currentData() == speed
+    assert not panel.diagnostic_button.isEnabled()
+    assert len(panel.repo.history("DiagnosticName")) == 1
+
+
+def test_diagnostic_overlap_and_stop_do_not_touch_another_operation(window, qtbot, monkeypatch):
+    import threading
+
+    panel = window.roblox
+    entered, release = threading.Event(), threading.Event()
+    previous = panel.repo.create_run(["PreviousName"])
+    panel.current_run = previous
+    panel.checking_mode.setCurrentIndex(2)
+
+    def fetch(url):
+        panel.test_calls.append(url)
+        entered.set()
+        assert release.wait(5)
+        return response()
+
+    panel.fetcher = fetch
+    monkeypatch.setattr(roblox_ui.QInputDialog, "getText", lambda *args: ("DiagnosticName", True))
+    monkeypatch.setattr(panel, "_confirm", lambda _: True)
+    panel.start_diagnostic()
+    try:
+        qtbot.waitUntil(entered.is_set, timeout=3000)
+        assert panel.busy and panel.stop_button.isEnabled()
+        assert panel.diagnostic_cancel_button.isVisibleTo(panel)
+        panel.start_diagnostic()
+        panel.check_restriction()
+        assert not panel.diagnostic_button.isEnabled()
+        panel.diagnostic_cancel_button.click()
+    finally:
+        release.set()
+    wait_done(qtbot, panel)
+    assert len(panel.test_calls) == 1 and panel.current_run == previous
+    assert panel.repo.progress(previous)["state"] == "Ready"
+
+
 @pytest.fixture
 def window(qtbot, tmp_path, monkeypatch):
     calls = []

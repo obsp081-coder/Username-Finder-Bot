@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -41,6 +42,7 @@ from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
 from .roblox_bulk_ui import BulkPanel
 from .roblox_prefilter_ui import PrefilterPanel
+from .roblox_restriction import RestrictionDiagnostic, diagnostic_summary, restriction_status
 from .roblox_runner import RobloxRunner
 from .roblox_storage import CHECK_INTERVALS, RobloxStore
 from .ui_cards import Card, CardGrid, Disclosure, ModeStrip, caption, icon
@@ -98,6 +100,7 @@ class RobloxPanel(QScrollArea):
         self.fetcher = fetcher
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="roblox")
         self.runner = None
+        self.diagnostic = None
         self.busy = self.closing = False
         self.stopping = False
         self.current_run = None
@@ -131,6 +134,22 @@ class RobloxPanel(QScrollArea):
         )
         header.addLayout(headings, 1)
         layout.addLayout(header)
+        restriction_actions = QHBoxLayout()
+        self.restriction_button = self._button("تحقق من القيد", self.check_restriction)
+        self.diagnostic_button = self._button("تشخيص بطلب واحد…", self.start_diagnostic)
+        self.diagnostic_button.setEnabled(False)
+        self.diagnostic_cancel_button = self._button("إيقاف التشخيص", self.stop)
+        self.diagnostic_cancel_button.hide()
+        restriction_actions.addWidget(self.restriction_button)
+        restriction_actions.addWidget(self.diagnostic_button)
+        restriction_actions.addWidget(self.diagnostic_cancel_button)
+        restriction_actions.addStretch()
+        layout.addLayout(restriction_actions)
+        self.restriction_label = QLabel()
+        self.restriction_label.setWordWrap(True)
+        self.restriction_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.restriction_label.hide()
+        layout.addWidget(self.restriction_label)
         self.activity_status = caption("جاهز • عمل واحد لكل منصة؛ يمكن تشغيل Roblox وX معًا.", "statusPill")
         root_layout = layout
         self.workspace = PlatformWorkspace()
@@ -406,11 +425,15 @@ class RobloxPanel(QScrollArea):
         future.add_done_callback(done)
 
     def _finished(self, callback, value, error):
+        was_diagnostic = self.diagnostic is not None
         self.busy = False
         self.stopping = False
         self.preparing = False
         self.runner = None
+        self.diagnostic = None
         if error:
+            if was_diagnostic:
+                self.restriction_label.setText(error + "\nتعذر إكمال التشخيص؛ لا إعادة تلقائية.")
             self.status.setText(error)
             self.refresh()
             self.status.setText(error)
@@ -424,6 +447,10 @@ class RobloxPanel(QScrollArea):
             self.idle.emit()
 
     def controls(self):
+        self.diagnostic_cancel_button.setVisible(self.diagnostic is not None)
+        self.diagnostic_cancel_button.setEnabled(self.diagnostic is not None and not self.closing)
+        self.restriction_button.setEnabled(not self.closing)
+        self.diagnostic_button.setEnabled(False)  # A fresh status review is required after each action.
         self.checking_mode.setEnabled(not self.busy and not self.closing)
         for widget in (
             self.modes,
@@ -438,7 +465,9 @@ class RobloxPanel(QScrollArea):
             self.operations,
         ):
             widget.setEnabled(not self.busy and not self.closing)
-        self.stop_button.setEnabled(self.busy and (self.runner is not None or self.preparing))
+        self.stop_button.setEnabled(
+            self.busy and (self.runner is not None or self.preparing or self.diagnostic is not None)
+        )
         if self.busy and self.preparing:
             self.resume_button.setEnabled(False)
             return
@@ -463,6 +492,44 @@ class RobloxPanel(QScrollArea):
     def speed_changed(self):
         self.repo.set_preferred_interval(self.speed.currentData())
         self.show_effective_speed()
+
+    def check_restriction(self):
+        status = restriction_status(self.repo)
+        self.restriction_label.show()
+        prefix = "واجهة Roblox مشغولة؛ التشخيص غير متاح حتى انتهاء العملية.\n" if self.busy else ""
+        self.restriction_label.setText(prefix + status["text"])
+        self.diagnostic_button.setEnabled(status["allowed"] and not self.busy and not self.closing)
+
+    def start_diagnostic(self):
+        if self.busy or self.closing:
+            return
+        self.check_restriction()
+        if not self.diagnostic_button.isEnabled():
+            return
+        username, accepted = QInputDialog.getText(self, "تشخيص Roblox", "اسم واحد صالح للصيغة:")
+        if not accepted or not self._confirm(
+            "إرسال طلب Roblox واحد لهذا الاسم وحفظ دليله في السجل؟ لا إعادة تلقائية، "
+            "ونجاحه لا يثبت زوال القيود أو سعة مستدامة."
+        ):
+            return
+        if self.busy or self.closing:
+            return
+        self.diagnostic = RestrictionDiagnostic(self.repo, fetcher=self.fetcher)
+        diagnostic = self.diagnostic
+        self.restriction_label.setText("جارٍ تشخيص واحد؛ يمكن إيقافه. لا طلبات إضافية تلقائية.")
+
+        def work():
+            try:
+                identity = diagnostic.run(username.strip())
+                return diagnostic_summary(self.repo, identity)
+            except ValueError:
+                return restriction_status(self.repo)["text"] + "\nلم يبدأ التشخيص؛ راجع القيد وصيغة الاسم."
+
+        def ready(text):
+            self.refresh()
+            self.restriction_label.setText(text + "\n" + restriction_status(self.repo)["text"])
+
+        self._submit(work, ready)
 
     def show_effective_speed(self):
         run = self.repo.progress(self.current_run) if self.current_run else None
@@ -580,6 +647,10 @@ class RobloxPanel(QScrollArea):
         )
 
     def stop(self, *, manual=True):
+        if self.diagnostic is not None:
+            self.diagnostic.cancel.set()
+            self.restriction_label.setText("جارٍ إيقاف التشخيص وحفظ الدليل؛ قد ينتظر الطلب مهلة الاتصال.")
+            return
         if self.prefilter.busy:
             self.prefilter.stop()
             return
