@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import threading
+import unicodedata
 from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -18,6 +19,30 @@ from .roblox import input_spec, input_values, syntax_error
 
 class Cancelled(Exception):
     pass
+
+
+def spreadsheet_cell(value):
+    """Return display text and an explicit JSON-encoding flag; never modify canonical evidence."""
+    if (
+        isinstance(value, str)
+        and value
+        and (value[0] in "=+-@'" or value[0].isspace() or unicodedata.category(value[0]).startswith("C"))
+    ):
+        # A literal JSON string begins with a double quote, not a spreadsheet formula prefix.
+        # ASCII escaping also makes hidden controls visible. CSV quoting alone is insufficient.
+        return json.dumps(value, ensure_ascii=True), True
+    return value, False
+
+
+def spreadsheet_row(row, fields):
+    """Append the names of JSON-encoded fields, so decoding cannot confuse ordinary JSON-like text."""
+    display, encoded = [], []
+    for name, value in zip(fields, row, strict=True):
+        cell, transformed = spreadsheet_cell(value)
+        display.append(cell)
+        if transformed:
+            encoded.append(name)
+    return [*display, json.dumps(encoded)]
 
 
 @dataclass(frozen=True)
@@ -301,23 +326,22 @@ class LocalSelection:
             }
             for filename, query in queries.items():
                 count = 0
+                fields = (
+                    "source_record",
+                    "original_value",
+                    "username",
+                    "first_record",
+                    "local_category",
+                    "reason",
+                )
                 with (destination / filename).open("x", encoding="utf-8", newline="") as stream:
                     writer = csv.writer(stream) if filename.endswith("csv") else None
                     if writer:
-                        writer.writerow(
-                            (
-                                "source_record",
-                                "original_value",
-                                "username",
-                                "first_record",
-                                "local_category",
-                                "reason",
-                            )
-                        )
+                        writer.writerow((*fields, "csv_json_fields"))
                     for row in db.execute(query):
                         self.check_cancel()
                         if writer:
-                            writer.writerow(tuple(row))
+                            writer.writerow(spreadsheet_row(row, fields))
                         else:
                             stream.write(row[0] + "\n")
                         count += 1
@@ -334,6 +358,12 @@ class LocalSelection:
                 **self.summary(),
                 "complete": True,
                 "files": evidence,
+                "audit_csv": {
+                    "version": 2,
+                    "encoding": "JSON string literals for sensitive cells; others unchanged",
+                    "decode": "json.loads fields named in json.loads(csv_json_fields); absent means v1 raw",
+                    "canonical_evidence": "Unmodified source (sha256) and selection.sqlite3 records",
+                },
                 "note": "Local preferences only, not availability. Source records are logical input values.",
             }
             self.check_cancel()

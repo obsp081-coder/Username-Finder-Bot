@@ -153,6 +153,8 @@ def worker(mode, source, directory):
                 itertools.zip_longest(original, csv.DictReader(audit)), 1
             ):
                 assert line is not None and record is not None
+                for field in json.loads(record.get("csv_json_fields", "[]")):
+                    record[field] = json.loads(record[field])
                 assert record["original_value"] == line and int(record["source_record"]) == ordinal
         assert ordinal == summary["cursor"] == sum(summary["counts"].values())
         for filename, evidence in exported["files"].items():

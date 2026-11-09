@@ -9,7 +9,13 @@ import pytest
 
 from username_finder.result_search import ResultFilter
 from username_finder.roblox import prepare_inputs, syntax_error
-from username_finder.roblox_local_selection import Cancelled, LocalSelection, Selection
+from username_finder.roblox_local_selection import (
+    Cancelled,
+    LocalSelection,
+    Selection,
+    spreadsheet_cell,
+    spreadsheet_row,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +39,13 @@ def records(tool):
         return [dict(row) for row in db.execute("SELECT * FROM records ORDER BY ordinal")]
 
 
+def canonical_csv(row):
+    row = dict(row)
+    for field in json.loads(row.get("csv_json_fields", "[]")):
+        row[field] = json.loads(row[field])
+    return row
+
+
 def test_disabled_preserves_source_order_exact_dedup_and_original_evidence(tmp_path):
     text = " NameOne \nnameone\nName_Two\ninvalid-name\n\nKool\nKool\n"
     tool, source = build(tmp_path, text)
@@ -47,7 +60,7 @@ def test_disabled_preserves_source_order_exact_dedup_and_original_evidence(tmp_p
     assert (output / "selected.txt").read_text().splitlines() == ["NameOne", "Name_Two", "Kool"]
     assert (output / "retained.txt").read_text() == ""
     with (output / "audit.csv").open(encoding="utf-8", newline="") as stream:
-        audit = list(csv.DictReader(stream))
+        audit = [canonical_csv(row) for row in csv.DictReader(stream)]
     assert [row["original_value"] for row in audit] == text.splitlines(keepends=True)
     assert audit[1]["first_record"] == "1" and audit[1]["local_category"] == "Duplicate"
     assert hashlib.sha256(source.read_bytes()).hexdigest() == digest == result["sha256"]
@@ -342,3 +355,163 @@ def test_explicit_candidate_budget_boundaries(tmp_path, budget):
             "SELECT max(ordinal) FROM records WHERE category='SelectedValid'"
         ).fetchone()[0]
         assert selected_end == budget
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "=SUM(1,2)",
+        "+1+2",
+        "-1+2",
+        "@SUM(1,2)",
+        "  =1",
+        "\t+1",
+        "\r-1",
+        "\n@SUM(1,2)",
+        "\x01=1",
+        "\x1f\t =1",
+        "\x7f+1",
+        "\x85-1",
+        "\u200b=1",
+        "\ufeff@SUM(1,2)",
+        "\u00a0=1",
+        "'=1",
+        " normal",
+        "\tNormal",
+        "\n",
+        "\x00=1",
+    ],
+)
+def test_spreadsheet_sensitive_cells_are_reversible_literals(value):
+    display, transformed = spreadsheet_cell(value)
+    assert transformed and display.startswith('"')
+    assert json.loads(display) == value
+    assert not display.startswith(("=", "+", "-", "@", " ", "\t", "\r", "\n"))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "NormalUser",
+        "Kool",
+        "مستخدم",
+        "Kool",
+        "ab_cd",
+        "ab,c",
+        'ab"c',
+        "ab\ncd",
+        '"=literal"',
+        '["username"]',
+        "",
+        42,
+    ],
+)
+def test_ordinary_cells_remain_unchanged(value):
+    assert spreadsheet_cell(value) == (value, False)
+
+
+def test_formula_audit_round_trip_source_references_and_canonical_evidence(tmp_path):
+    values = [
+        "=SUM(1,2)",
+        "+1+2",
+        "-1+2",
+        "@SUM(1,2)",
+        " \t=1",
+        "\n+1",
+        "\r-1",
+        "\x01@SUM(1,2)",
+        "\ufeff=1",
+        'name,"quoted"\nline',
+        "مستخدم",
+        "NormalUser",
+        "normaluser",
+        "  abc  ",
+        '"=literal"',
+        "=SUM(1,2)",
+    ]
+    source = tmp_path / "source.csv"
+    with source.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["username", "note"])
+        writer.writerows((value, "not changed") for value in values)
+    source_bytes = source.read_bytes()
+    tool = LocalSelection(tmp_path / "run").create(source, Selection(budget=1))
+    original_summary = tool.prepare()
+    original_records = records(tool)
+    db_digest = hashlib.sha256(tool.path.read_bytes()).hexdigest()
+    output = tmp_path / "export"
+    result = tool.export(output)
+    with (output / "audit.csv").open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        assert reader.fieldnames == [
+            "source_record",
+            "original_value",
+            "username",
+            "first_record",
+            "local_category",
+            "reason",
+            "csv_json_fields",
+        ]
+        display = list(reader)
+    decoded = [canonical_csv(row) for row in display]
+    assert [row["original_value"] for row in decoded] == values
+    for ordinal, (row, stored) in enumerate(zip(decoded, original_records, strict=True), 1):
+        assert int(row["source_record"]) == stored["ordinal"] == ordinal
+        assert row["username"] == stored["username"]
+        assert row["local_category"] == stored["category"]
+        assert int(row["first_record"]) == stored["first_record"]
+        assert row["reason"] == stored["reason"]
+        assert row["local_category"] not in {"Available", "Taken"}
+    assert decoded[-1]["first_record"] == "1"
+    assert display[0]["original_value"].startswith('"')
+    assert json.loads(display[0]["csv_json_fields"]) == ["original_value", "username"]
+    assert display[11]["original_value"] == "NormalUser" and display[11]["csv_json_fields"] == "[]"
+    assert result["files"]["audit.csv"]["rows"] == len(values)
+    assert result["audit_csv"]["version"] == 2 and not result["availability_verified"]
+    for filename, evidence in result["files"].items():
+        assert hashlib.sha256((output / filename).read_bytes()).hexdigest() == evidence["sha256"]
+    assert source.read_bytes() == source_bytes
+    assert records(tool) == original_records and tool.summary() == original_summary
+    assert hashlib.sha256(tool.path.read_bytes()).hexdigest() == db_digest
+    assert (output / "selected.txt").read_text() == "NormalUser\n"
+    assert (output / "retained.txt").read_text() == "abc\n"
+    # Existing v1 canonical work indexes can export again; prior completed exports stay byte-identical.
+    old_export = {p.name: p.read_bytes() for p in output.iterdir()}
+    restored = LocalSelection(tool.directory)
+    restored.prepare()
+    assert restored.export(tmp_path / "new-export")["audit_csv"]["version"] == 2
+    assert {p.name: p.read_bytes() for p in output.iterdir()} == old_export
+
+
+def test_all_untrusted_text_columns_are_protected_and_json_is_not_guessed():
+    fields = ("source_record", "original_value", "username", "first_record", "local_category", "reason")
+    values = (1, '"=ordinary JSON-like text"', "=formula", 1, "+future_category", "\t=untrusted_reason")
+    display = spreadsheet_row(values, fields)
+    row = dict(zip((*fields, "csv_json_fields"), display, strict=True))
+    assert json.loads(row["csv_json_fields"]) == ["username", "local_category", "reason"]
+    assert canonical_csv(row)["original_value"] == values[1]
+    assert tuple(canonical_csv(row)[name] for name in fields) == values
+    assert canonical_csv({"original_value": "=legacy raw"})["original_value"] == "=legacy raw"
+
+
+def test_interrupted_sensitive_export_remains_incomplete_and_recovers(tmp_path):
+    tool, source = build(tmp_path, "=1\n" * 1200 + "NormalUser\n")
+    tool.prepare()
+    stored = records(tool)
+    tool.notify = lambda _: tool.cancel.set()
+    interrupted = tmp_path / "interrupted"
+    with pytest.raises(Cancelled):
+        tool.export(interrupted)
+    assert not (interrupted / "summary.json").exists()
+    partial = (interrupted / "audit.csv").read_bytes()
+    tool.cancel.clear()
+    restored = LocalSelection(tool.directory)
+    result = restored.export(tmp_path / "complete")
+    assert result["complete"] and result["files"]["audit.csv"]["rows"] == 1201
+    assert (interrupted / "audit.csv").read_bytes() == partial
+    assert records(restored) == stored
+    with (tmp_path / "complete" / "audit.csv").open(encoding="utf-8", newline="") as stream:
+        decoded = [canonical_csv(row) for row in csv.DictReader(stream)]
+    assert all(row["original_value"] == "=1\n" for row in decoded[:-1])
+    assert all(row["first_record"] == "1" for row in decoded[:-1])
+    assert source.read_text() == "=1\n" * 1200 + "NormalUser\n"
