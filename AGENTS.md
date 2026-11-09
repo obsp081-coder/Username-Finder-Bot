@@ -9,6 +9,13 @@
 - ChatGPT-only research and decisions must be explicitly supplied to Codex. Never infer access to other conversations; distinguish user-reported findings from repository-documented evidence and new verification.
 - Documentation-only changes require content and Markdown review, not pytest, Ruff, compileall, GUI tests, or live probes. Respect the user's approved scope and keep tool usage efficient.
 
+## GUI Test Execution
+
+- Run compatible Qt regression and UI logic tests with `QT_QPA_PLATFORM=offscreen` in the test child process only. Prefer explicit child-process environment overrides; never change Windows user/machine variables, terminal profiles, `Start.cmd`, or production startup. The existing `tests/conftest.py` default is test-only; an inherited `windows` value must not override the chosen offscreen invocation.
+- Until the user explicitly authorizes visible desktop testing, do not open native windows, activate/focus real windows, send desktop keyboard/mouse input, or run visible launcher/smoke helpers. A generic request to test the GUI is not authorization for native desktop testing. In-process Qt test events on offscreen widgets are permitted.
+- Defer tests that require a real display, including native Windows rendering, DPI, desktop screenshots and window management. Report them as not run; offscreen layout/event checks do not provide equivalent native coverage. Do not set `UFB_SCREENSHOTS` or opt into native test flags during unattended regression runs.
+- Keep testing isolated from production databases and saved operations, use mocked providers, and do not resume jobs or alter provider restrictions. Report actual offscreen results and the deferred native checks separately.
+
 ## Git Commit and Push Workflow
 
 - After successfully completing an explicitly approved development or documentation task, automatically commit and push its approved changes. This authorization excludes exploratory research and unapproved modifications.

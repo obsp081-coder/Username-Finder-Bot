@@ -33,11 +33,33 @@ python -m venv .venv
 الأوامر المستخدمة للتحقق:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m ruff check username_finder tests tools
 .\.venv\Scripts\python.exe -m ruff format --check username_finder tests tools
 .\.venv\Scripts\python.exe tools\benchmark.py --sample 1200
 ```
+
+**اختبارات Qt دون مقاطعة سطح المكتب:** يستعمل `tests/conftest.py` وضع `offscreen` افتراضيًا. عند تشغيل الاختبارات آليًا، افرضه في بيئة عملية الاختبار فقط حتى إن ورث الطرفية قيمة `windows`. مثال لمجموعة منطق واجهة متوافقة، مع نماذج حساب ومراجعة غير متصلة:
+
+```powershell
+@'
+import os
+import subprocess
+import sys
+
+environment = os.environ.copy()
+environment["QT_QPA_PLATFORM"] = "offscreen"
+environment.pop("UFB_SCREENSHOTS", None)
+environment.pop("UFB_NATIVE_POWER", None)
+tests = [
+    "tests/test_roblox_prefilter_estimates.py",
+    "tests/test_roblox_prefilter_review.py",
+    "tests/test_roblox_prefilter_rollout_ui.py::test_selectable_range_preview_and_explicit_dispatch_guard",
+]
+raise SystemExit(subprocess.call([sys.executable, "-m", "pytest", *tests, "-q"], env=environment))
+'@ | .\.venv\Scripts\python.exe -
+```
+
+لا يغير هذا بيئة الطرفية الأم أو Windows أو `Start.cmd` أو تشغيل التطبيق العادي. تبقى اختبارات العرض الأصلي وDPI ولقطات سطح المكتب وإدارة النوافذ، ومنها `tools/launcher_smoke.py`، **مؤجلة حتى إذن المستخدم الصريح بفحص مرئي**؛ لا تستبدلها بـoffscreen وتدّعِ تغطية مماثلة. إرسال أحداث Qt إلى عناصر offscreen يختبر المنطق فقط، دون إدخال لوحة مفاتيح أو فأرة إلى سطح المكتب. لا تشغل فاحصات حية أو عمليات محفوظة أثناء هذه الاختبارات، ولا تغير قيود الموفر.
 
 قياسات المحاكي لا تقيس سرعة سناب أو دقته. حدود المصدر تبقى مستقلة عن إعداد العمال 1–1000. يُفعّل الفاحص الحقيقي فقط بعد إثبات وصول مشروع للقراءة ودلالة الاستجابة بمرجع مستقل؛ 404/403/429 أو غياب ملف أو خطأ شبكة لا تثبت التوفر. راجع [PROGRESS.md](PROGRESS.md) للحالة والاختبارات والعائق المتبقي.
 
