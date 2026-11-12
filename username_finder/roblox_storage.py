@@ -451,7 +451,7 @@ class RobloxStore:
         with self.store.lock:
             return self._control(self.store.db)
 
-    def claim_next(self, run_id, *, night=None, clock=None):
+    def claim_next(self, run_id, *, night=None, clock=None, not_before=None):
         with self.store.transaction() as db:
             run = db.execute("SELECT * FROM roblox_runs WHERE id=?", (run_id,)).fetchone()
             if not run or run["state"] != "Running":
@@ -480,6 +480,12 @@ class RobloxStore:
                     (run_id, row["position"]),
                 )
                 task = dict(row)
+                if not_before is not None:
+                    deadline = timestamp(not_before)
+                    control = self._control(db)
+                    previous = timestamp(control["not_before"]) if control.get("not_before") else ""
+                    control["not_before"] = max(previous, deadline)
+                    self._save_control(db, control)
                 if night is not None and night.requesting(task, clock=clock, db=db):
                     task["_night_retry_started"] = True
                 return task

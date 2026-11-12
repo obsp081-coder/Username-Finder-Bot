@@ -10,6 +10,7 @@ from .roblox_activity import RobloxActivity
 from .roblox_runner import RobloxRunner
 
 RECORDED_REASONS = {
+    "individual_review_required": "قيد فردي محفوظ بعد تقييد أو دليل غير محسوم؛ يلزم تدقيق يدوي",
     "http_429": "HTTP 429 — تقييد معدل محفوظ",
     "http_403": "HTTP 403 — رفض وصول محفوظ",
     "http_401": "HTTP 401 — رفض وصول محفوظ",

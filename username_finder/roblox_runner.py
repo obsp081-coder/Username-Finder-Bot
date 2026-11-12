@@ -22,10 +22,17 @@ class RobloxRunner:
         self.manual_stop = threading.Event()
         self.disable_overnight = threading.Event()
         self.night = OvernightStore(repository.store, "Roblox")
+        self.execution = None
 
     def run(self, run_id, *, automatic=False):
         # This guard also covers overnight and scheduled entry points.
-        with RobloxActivity(self.repository.store.path):
+        with RobloxActivity(self.repository.store.path) as activity:
+            from .roblox_concurrent import ConcurrentExecution, execution_policy
+
+            policy = execution_policy(self.repository, run_id)
+            if policy["workers"] > 1:
+                self.execution = ConcurrentExecution(self, run_id, policy, activity)
+                return self.execution.run(automatic=automatic)
             return self._run(run_id, automatic=automatic)
 
     def _run(self, run_id, *, automatic=False):

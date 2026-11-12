@@ -41,6 +41,7 @@ from .result_filters_ui import AdvancedResultFilters, ResultQueryController
 from .result_search import ResultSearch
 from .roblox import LABELS, generation_range_spec, input_spec, prepare_inputs
 from .roblox_bulk_ui import BulkPanel
+from .roblox_concurrent import configure_execution, execution_policy
 from .roblox_prefilter_ui import PrefilterPanel
 from .roblox_restriction import (
     RestrictionDiagnostic,
@@ -105,6 +106,7 @@ class RobloxPanel(QScrollArea):
         self.fetcher = fetcher
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="roblox")
         self.runner = None
+        self.last_execution = None
         self.diagnostic = None
         self._restriction_automatic = False
         self.busy = self.closing = False
@@ -236,6 +238,30 @@ class RobloxPanel(QScrollArea):
         self.speed.setToolTip("للعمليات الجديدة فقط؛ تحتفظ العملية المحفوظة بسرعتها عند الاستئناف.")
         speed_form.addRow("سرعة الفحص", self.speed)
         layout.addLayout(speed_form)
+        self.parallel = QCheckBox("تفعيل فحص فردي متزامن محدود (اختياري)")
+        layout.addWidget(self.parallel)
+        parallel_form = QFormLayout()
+        self.workers = QSpinBox()
+        self.workers.setRange(2, 8)
+        self.workers.setValue(2)
+        self.request_rate = QComboBox()
+        for rate in (0.25, 0.5, 1.0, 2.0, 5.0):
+            self.request_rate.addItem(f"{rate:g} طلب/ثانية إجمالًا", rate)
+        self.request_rate.setCurrentIndex(2)
+        style_combo_popup(self.request_rate)
+        parallel_form.addRow("عدد العمال", self.workers)
+        parallel_form.addRow("سقف الإرسال المشترك", self.request_rate)
+        layout.addLayout(parallel_form)
+        parallel_note = QLabel(
+            "التوازي يتطلب فاصل 0 ثانية ودون استرداد ليلي؛ الإعدادات تحفظ للعملية. "
+            "القيم حدود محلية وليست حصة موفر مثبتة. القيود المحفوظة تبقى نافذة."
+        )
+        parallel_note.setWordWrap(True)
+        layout.addWidget(parallel_note)
+        self.parallel.toggled.connect(self.controls)
+        self.execution_status = QLabel()
+        self.execution_status.setWordWrap(True)
+        history_layout.addWidget(self.execution_status)
         self.speed_warning = QLabel(
             "سرعة تجريبية: نجحت الاختبارات القصيرة، لكن استقرار التشغيل الطويل غير مضمون.\n"
             "Experimental speed. Short tests succeeded, but long-running stability is not guaranteed."
@@ -437,6 +463,8 @@ class RobloxPanel(QScrollArea):
         self.busy = False
         self.stopping = False
         self.preparing = False
+        if self.runner is not None and self.runner.execution is not None:
+            self.last_execution = (self.current_run, self.runner.execution.snapshot())
         self.runner = None
         self.diagnostic = None
         if error and not self.closing:
@@ -471,6 +499,7 @@ class RobloxPanel(QScrollArea):
         for widget in (
             self.modes,
             self.speed,
+            self.parallel,
             self.skip_previous,
             self.preview_button,
             self.start_button,
@@ -481,6 +510,13 @@ class RobloxPanel(QScrollArea):
             self.operations,
         ):
             widget.setEnabled(not self.busy and not self.closing)
+        for widget in (self.workers, self.request_rate):
+            widget.setEnabled(self.parallel.isChecked() and not self.busy and not self.closing)
+        if hasattr(self, "overnight"):
+            concurrent = (
+                self.runner is not None and execution_policy(self.repo, self.current_run)["workers"] > 1
+            )
+            self.overnight.enabled.setEnabled(not concurrent and not self.closing)
         self.stop_button.setEnabled(
             self.busy and (self.runner is not None or self.preparing or self.diagnostic is not None)
         )
@@ -582,6 +618,13 @@ class RobloxPanel(QScrollArea):
         seconds = run["interval_seconds"] if run else self.speed.currentData()
         self.speed_warning.setVisible(seconds == 0 or self.speed.currentData() == 0)
         prefix = "سرعة العملية المحفوظة (وعند الاستئناف)" if run else "سرعة العمليات الجديدة"
+        policy = execution_policy(self.repo, self.current_run)
+        if policy["workers"] > 1:
+            self.effective_speed.setText(
+                f"{prefix}: {policy['workers']} عمال، سقف مشترك {policy['rate']:g} طلب/ث. "
+                "بدء يدوي فقط؛ أي قيد يوقف الإرسال ويتطلب مراجعة."
+            )
+            return
         self.effective_speed.setText(
             f"{prefix}: {seconds:g} ثانية بعد الاستجابة، دون توازٍ. تسري أي مهلة أطول يفرضها الخادم."
         )
@@ -682,13 +725,38 @@ class RobloxPanel(QScrollArea):
     def _start_run(self, identity, *, automatic=False):
         if not self.allow_dispatch():
             return
+        try:
+            policy = execution_policy(self.repo, identity)
+            saved = self.repo.control().get("individual_execution", {}).get(identity)
+            if not automatic and saved is None and self.parallel.isChecked():
+                configure_execution(
+                    self.repo, identity, workers=self.workers.value(), rate=self.request_rate.currentData()
+                )
+            policy = execution_policy(self.repo, identity)
+            if policy["workers"] > 1 and not self.parallel.isChecked():
+                raise ValueError("يلزم تفعيل خيار التوازي صراحةً لاستئناف هذه العملية بإعداداتها المحفوظة.")
+            if policy["workers"] > 1 and (
+                automatic
+                or self.overnight.enabled.isChecked()
+                or (self.overnight.repo.get(identity) or {}).get("enabled")
+            ):
+                raise ValueError("التوازي يحتاج بدءًا يدويًا دون استرداد ليلي أو إعادة محاولات.")
+        except (ValueError, TypeError) as exc:
+            self.status.setText(str(exc))
+            return
         self.current_run = identity
+        self.last_execution = None
         self.overnight.arm(identity)
         self.runner = RobloxRunner(self.repo, fetcher=self.fetcher, updated=self.progress_changed.emit)
         runner = self.runner
         self.show_effective_speed()
-        self.status.setText("جارٍ الفحص المتسلسل بالسرعة المحفوظة للعملية.")
-        self.activity_status.setText("Roblox • جارٍ الفحص المتسلسل بالسرعة المحفوظة.")
+        description = (
+            f"فحص فردي متزامن: {policy['workers']} عمال، سقف {policy['rate']:g} طلب/ث"
+            if policy["workers"] > 1
+            else "فحص متسلسل بالسرعة المحفوظة"
+        )
+        self.status.setText(description)
+        self.activity_status.setText("Roblox • " + description)
         self._submit(
             lambda: runner.run(identity, automatic=True) if automatic else runner.run(identity),
             lambda _: self.refresh(),
@@ -918,6 +986,27 @@ class RobloxPanel(QScrollArea):
         self.speed.setCurrentIndex(self.speed.findData(self.repo.preferred_interval()))
         self.speed.blockSignals(False)
         self.show_effective_speed()
+        snapshot = (
+            self.runner.execution.snapshot()
+            if self.runner and self.runner.execution
+            else self.last_execution[1]
+            if self.last_execution and self.last_execution[0] == self.current_run
+            else None
+        )
+        if snapshot:
+            self.execution_status.setText(
+                f"هذه الجلسة: {snapshot['workers']} عمال • سقف {snapshot['rate']:g} طلب/ث • "
+                f"حسم مقبول {snapshot['accepted_per_second']:.2f}/ث • "
+                f"{snapshot['results_per_minute']:.1f}/دقيقة • "
+                f"محاولات {snapshot['attempts']} ({snapshot['attempts_per_second']:.2f}/ث) • "
+                f"ردود HTTP {snapshot['http_responses']} منها 200: {snapshot['http_200']} • "
+                f"جارٍ {snapshot['active']} • غير محفوظ بعد {snapshot['outstanding']}\n"
+                + " • ".join(f"{name}: {snapshot['counts'].get(name, 0)}" for name in LABELS)
+                + (" • انتظار مهلة مشتركة" if snapshot["waiting"] else "")
+                + (" • توقف للمراجعة: " + snapshot["reason"] if snapshot["reason"] else "")
+            )
+        else:
+            self.execution_status.clear()
         if not self.busy or self.isVisible():
             counts = self.repo.counts()
             self.counters.setText(
