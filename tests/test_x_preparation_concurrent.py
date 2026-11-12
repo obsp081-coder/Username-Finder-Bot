@@ -8,6 +8,7 @@ from collections import Counter
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 from test_multi_jobs import select
@@ -18,7 +19,6 @@ from test_x import response as x_response
 from test_x_preparation import select_file, write_five
 
 from username_finder import roblox_ui, x, x_ui
-from username_finder.gui import MainWindow
 from username_finder.overnight_preflight_ui import OvernightPreflightDialog
 from username_finder.roblox_runner import RobloxRunner
 from username_finder.x_runner import XRunner

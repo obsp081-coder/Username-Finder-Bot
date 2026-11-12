@@ -2,13 +2,13 @@ import os
 import threading
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QMessageBox
 from test_roblox import response as roblox_response
 from test_x import response as x_response
 
 from username_finder import roblox_ui, x, x_ui
-from username_finder.gui import MainWindow
 from username_finder.platform_workspace import ReadableColumns
 from username_finder.roblox_runner import RobloxRunner
 from username_finder.roblox_storage import RobloxStore

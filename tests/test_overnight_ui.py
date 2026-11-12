@@ -2,6 +2,7 @@ import os
 import threading
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from test_multi_jobs import concurrent_window as concurrent_window
@@ -10,7 +11,6 @@ from test_roblox import response as roblox_response
 from test_x import Clock
 
 from username_finder import roblox_ui, x_protocol
-from username_finder.gui import MainWindow
 from username_finder.roblox_runner import RobloxRunner
 from username_finder.storage import Store
 from username_finder.x_storage import XStore

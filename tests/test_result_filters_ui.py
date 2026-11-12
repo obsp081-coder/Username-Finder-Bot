@@ -4,11 +4,11 @@ import threading
 import time
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QPoint, QRect, QTimer
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from test_result_search import record
 
-from username_finder.gui import MainWindow
 from username_finder.result_filters_ui import ResultQueryController
 from username_finder.result_search import ResultFilter, ResultSearch
 from username_finder.saved_results_ui import SavedResultsDialog

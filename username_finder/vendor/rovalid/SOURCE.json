@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/obsp081-coder/RoValid-Dev-final",
+  "revision": "d9cba38980fa13a33cc5b874c989105f8b9ff27f",
+  "files": {
+    "checker.py": "4c2bcf60a88ee45381164865f42649fb3805720f72c5be7513212aab366ae038",
+    "config.py": "223d31f2f8967670446d88e9ed970c21a5cde8de231eef92c8ffe1024ed9ad02",
+    "engine.py": "e88eb7e7509013f00f71c6997408ac6cd135252873dcc19a306d3e89eae59e42",
+    "storage.py": "7bfbcf0d0f260e647e9e570c09d1fa728c9aaeb09d4ccbd3cdd3e17c2225fc68",
+    "proxy.py": "e5af30a80153e7d1ad0feed9a9157bbda780af983001645235f7df1cce5b453b",
+    "diagnostics.py": "f8ef9d2e596d6a4ac9037b4c5aa5f64351214e2bc812a5bf3bdef8ae15885c9f",
+    "wizard.py": "f3db1693bb4a8ccebffc249326e54c4b5632b0cca4aad10b7c6483b13ac4f2ff",
+    "ui.py": "28ccfe288abc2f819e7ae4f08eab0178aa01dab9ebd96e0d9737ea66d09304fa",
+    "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "requirements.txt": "bc40d167f88ae75ab7bd8cc12830fdb72b141eb37d1869ec8e01a1ff55f0901f"
+  }
+}

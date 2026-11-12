@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from . import x
 from .overnight import STATES as OVERNIGHT_STATES
+from .overnight import OvernightStore
 from .platform_workspace import ReadableColumns
 from .roblox_ui import STATES as ROBLOX_STATES
 from .ui_cards import Card, caption, icon
@@ -35,6 +36,7 @@ class JobManagerPanel(QWidget):
         super().__init__()
         self.window = window
         self.panels = {"Roblox": window.roblox, "X": window.x_panel}
+        self.legacy_night = OvernightStore(window.store, "Roblox")
         self.rows = []
         self.offset = 0
         self.awake = AwakeRequest()
@@ -55,6 +57,10 @@ class JobManagerPanel(QWidget):
         self.search_results_button.setIcon(icon("file", size=19))
         self.search_results_button.clicked.connect(self.search_results)
         toolbar.addWidget(self.search_results_button)
+        if not hasattr(window.roblox, "overnight"):
+            rovalid_history = QPushButton("سجل RoValid المستقل")
+            rovalid_history.clicked.connect(self.open_rovalid_history)
+            toolbar.addWidget(rovalid_history)
         self.preflight_button = QPushButton("جاهزية التشغيل الليلي")
         self.preflight_button.setIcon(icon("check", size=19))
         self.preflight_button.clicked.connect(self.preflight)
@@ -146,6 +152,10 @@ class JobManagerPanel(QWidget):
         self.refresh()
         self.update_power()
 
+    def open_rovalid_history(self):
+        self.window.tabs.setCurrentWidget(self.window.roblox)
+        self.window.roblox.workspace.setCurrentIndex(3)
+
     def preflight(self):
         from .overnight_preflight_ui import OvernightPreflightDialog
 
@@ -158,7 +168,13 @@ class JobManagerPanel(QWidget):
         if self.keep_awake.isChecked() and not self.window.closing and not self.window.closed:
             try:
                 for panel in self.panels.values():
-                    if not panel.busy or panel.stopping or not panel.runner or panel.runner.cancel.is_set():
+                    if (
+                        not hasattr(panel, "overnight")
+                        or not panel.busy
+                        or panel.stopping
+                        or not panel.runner
+                        or panel.runner.cancel.is_set()
+                    ):
                         continue
                     data = panel.overnight.repo.get(panel.current_run) or {}
                     if (
@@ -198,7 +214,7 @@ class JobManagerPanel(QWidget):
 
     def overnight_selected(self):
         row = self.selected()
-        if row:
+        if row and (row["platform"] != "Roblox" or hasattr(self.window.roblox, "overnight")):
             self.open_selected()
             controls = self.panels[row["platform"]].overnight
             controls.enabled.setFocus()
@@ -252,7 +268,8 @@ class JobManagerPanel(QWidget):
                     state = "لا أسماء مؤهلة"
                 elif blocked and run["state"] in ("Ready", "Paused"):
                     state = "ممنوعة بقيد المنصة"
-                night = panel.overnight.repo.get(identity)
+                night_repo = panel.overnight.repo if hasattr(panel, "overnight") else self.legacy_night
+                night = night_repo.get(identity)
                 if night and night["enabled"]:
                     if panel.busy and panel.current_run == identity and not panel.stopping:
                         state = OVERNIGHT_STATES.get(night["state"], state)
@@ -269,7 +286,7 @@ class JobManagerPanel(QWidget):
                         classifications=counts,
                         route=route,
                         restriction=str(blocked) if blocked else "",
-                        overnight=panel.overnight.repo.label(identity),
+                        overnight=night_repo.label(identity),
                     )
                 )
             return rows, total
@@ -289,7 +306,9 @@ class JobManagerPanel(QWidget):
         self.columns.fill(
             [
                 [
-                    r["platform"],
+                    "Roblox · أرشيف"
+                    if r["platform"] == "Roblox" and not hasattr(self.window.roblox, "overnight")
+                    else r["platform"],
                     r["id"][:8],
                     r["display_state"],
                     f"{r['done']}/{r['total']}" if r["total"] is not None else "التحضير غير مكتمل",
@@ -332,6 +351,8 @@ class JobManagerPanel(QWidget):
                     if panel.stopping and panel.busy
                     else "نشطة"
                     if panel.busy
+                    else "مراجعة RoValid مطلوبة"
+                    if hasattr(panel, "checking_allowed") and not panel.checking_allowed
                     else "متوقفة بقيد"
                     if panel.repo.control().get("blocked")
                     else "جاهزة"
@@ -376,6 +397,12 @@ class JobManagerPanel(QWidget):
             + "\n"
             + row["overnight"]
         )
+        if row["platform"] == "Roblox" and not hasattr(panel, "overnight"):
+            self.overnight_button.setEnabled(False)
+            self.details.setText(
+                self.details.text() + "\nأرشيف Roblox القديم للقراءة فقط؛ لا يُشغّل عبر RoValid."
+            )
+            return
         eligible = row["state"] in ("Ready", "Paused", "PreparationPaused", "PreparationError")
         if row["platform"] == "Roblox":
             eligible = eligible or row["state"] in ("Restricted", "Error")
@@ -393,6 +420,8 @@ class JobManagerPanel(QWidget):
         if not row:
             return
         panel = self.panels[row["platform"]]
+        if row["platform"] == "Roblox" and not hasattr(panel, "overnight"):
+            return
         if panel.busy or panel.closing:
             return
         panel.current_run = row["id"]
@@ -405,6 +434,8 @@ class JobManagerPanel(QWidget):
         row = self.selected()
         if row:
             panel = self.panels[row["platform"]]
+            if row["platform"] == "Roblox" and not hasattr(panel, "overnight"):
+                return
             if panel.busy and panel.current_run == row["id"]:
                 panel.stop()
         self.refresh()
@@ -413,6 +444,10 @@ class JobManagerPanel(QWidget):
         row = self.selected()
         if row:
             panel = self.panels[row["platform"]]
+            if row["platform"] == "Roblox" and not hasattr(panel, "overnight"):
+                self.window.tabs.setCurrentWidget(panel)
+                panel.workspace.setCurrentIndex(3)
+                return
             if not panel.busy:
                 panel.current_run = row["id"]
                 panel.refresh()

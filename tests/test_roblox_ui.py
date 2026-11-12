@@ -2,12 +2,12 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from test_roblox import csv_file, response
 
 from username_finder import roblox_protocol, roblox_ui
-from username_finder.gui import MainWindow
 from username_finder.roblox_storage import RobloxStore
 from username_finder.storage import Store
 

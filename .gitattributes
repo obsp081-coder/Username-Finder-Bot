@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Preserve the reviewed upstream RoValid bytes, including line endings.
+username_finder/vendor/rovalid/* -text
+# The pinned upstream wizard contains one original whitespace-only line.
+username_finder/vendor/rovalid/wizard.py whitespace=-blank-at-eol

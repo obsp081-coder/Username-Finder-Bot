@@ -6,11 +6,11 @@ import time
 from pathlib import Path
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from test_roblox_file_scale import window as window
 from test_roblox_file_scale import write_names
 
 from username_finder import roblox, roblox_storage
-from username_finder.gui import MainWindow
 from username_finder.roblox import input_spec, prepare_inputs
 from username_finder.roblox_storage import RobloxStore
 from username_finder.storage import Store

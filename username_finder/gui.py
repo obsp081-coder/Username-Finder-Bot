@@ -54,7 +54,7 @@ from .instagram_ui import InstagramPanel
 from .job_manager_ui import JobManagerPanel
 from .platform_workspace import ResultsPresentation
 from .presets import file_issues, make_payload, resolve_path, validate_payload
-from .roblox_ui import RobloxPanel
+from .rovalid_ui import RoValidPanel
 from .scheduling import ScheduleConfig, Scheduler
 from .snapscore_ui import SnapscorePanel
 from .sources import MeaningLibrary, make_snapshot, preview_txt
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         self.navigation.setObjectName("navigation")
         self.navigation.setAccessibleName("التنقل بين مساحات العمل")
         self.navigation.setIconSize(QSize(23, 23))
-        self.navigation.setUniformItemSizes(True)
+        self.navigation.setUniformItemSizes(False)
         self.navigation.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         side.addWidget(self.navigation, 1)
         local = QLabel("بياناتك محلية\nAsia/Riyadh")
@@ -246,7 +246,7 @@ class MainWindow(QMainWindow):
         self.file_search = FileSearchPanel(analysis=self.instagram.analysis)
         self.file_search.idle.connect(self._close_after_osintgram)
         self.tabs.addTab(self.file_search, "البحث داخل الملفات")
-        self.roblox = RobloxPanel(self.store, self.make_table, self.fill_table)
+        self.roblox = RoValidPanel(self.store, self.make_table, self.fill_table)
         self.roblox.idle.connect(self._close_after_osintgram)
         self.tabs.addTab(self.roblox, "Roblox")
         self.file_generator = FileGeneratorPanel()
@@ -262,18 +262,25 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.dashboard, "لوحة التحكم")
         for index, label, symbol in (
             (7, "لوحة التحكم", "home"),
-            (3, "Roblox", "roblox"),
-            (1, "Instagram", "instagram"),
+            (None, "اجتماعي · Social", None),
             (0, "سناب", "snapchat"),
+            (1, "Instagram", "instagram"),
             (5, "X · تجريبي", "x"),
+            (None, "ألعاب · Games", None),
+            (3, "Roblox", "roblox"),
+            (None, "أدوات العمل", None),
             (6, "إدارة العمليات", "layers"),
             (4, "صانع اليوزرات", "generate"),
             (2, "بحث الملفات", "search"),
         ):
-            item = QListWidgetItem(icon(symbol, size=23), label)
+            item = QListWidgetItem(icon(symbol, size=23), label) if symbol else QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, index)
-            item.setToolTip(self.tabs.tabText(index))
-            item.setSizeHint(QSize(150, 42))
+            if index is None:
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+                item.setSizeHint(QSize(150, 28))
+            else:
+                item.setToolTip(self.tabs.tabText(index))
+                item.setSizeHint(QSize(150, 42))
             self.navigation.addItem(item)
         self.navigation.currentRowChanged.connect(self.navigate)
         self.tabs.currentChanged.connect(self.sync_navigation)
@@ -301,10 +308,20 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "sidebar"):
             self.sidebar.setFixedWidth(168 if self.width() < 1050 else 192)
+            compact = self.height() < 760
+            if self.navigation.property("compact") != compact:
+                self.navigation.setProperty("compact", compact)
+                for row in range(self.navigation.count()):
+                    item = self.navigation.item(row)
+                    heading = item.data(Qt.ItemDataRole.UserRole) is None
+                    height = (20 if heading else 40) if compact else (28 if heading else 42)
+                    item.setSizeHint(QSize(150, height))
+                self.navigation.style().unpolish(self.navigation)
+                self.navigation.style().polish(self.navigation)
 
     def navigate(self, row):
         item = self.navigation.item(row)
-        if item:
+        if item and item.data(Qt.ItemDataRole.UserRole) is not None:
             self.tabs.setCurrentIndex(item.data(Qt.ItemDataRole.UserRole))
 
     def sync_navigation(self, index):
@@ -1853,14 +1870,14 @@ class MainWindow(QMainWindow):
             self.refresh_jobs()
             self.refresh_history()
             self.refresh_results()
-            for panel, platform in ((self.roblox, "Roblox"), (self.x_panel, "X")):
+            for panel, platform in ((self.x_panel, "X"),):
                 panel.overnight.repo = type(panel.overnight.repo)(self.store, platform)
                 panel.overnight.enabled.blockSignals(True)
                 panel.overnight.enabled.setChecked(False)
                 panel.overnight.enabled.blockSignals(False)
             self.roblox.current_run = None
-            self.roblox.repo.recover()
-            self.roblox.refresh()
+            self.roblox.record = {}
+            self.roblox.controls()
             self.x_panel.repo = type(self.x_panel.repo)(self.store)
             self.x_panel.current_run = None
             self.x_panel.repo.recover()

@@ -4,10 +4,10 @@ import os
 import time
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from username_finder.gui import MainWindow
 from username_finder.saved_results_ui import SavedResultsDialog
 
 
@@ -28,12 +28,21 @@ def test_sidebar_default_rtl_and_page_identity(desktop, qtbot):
     window = desktop
     assert window.tabs.currentWidget() is window.dashboard
     assert not window.tabs.tabBar().isVisible()
-    assert window.navigation.count() == window.tabs.count() == 8
+    assert window.tabs.count() == 8
+    assert (
+        sum(
+            window.navigation.item(i).data(Qt.ItemDataRole.UserRole) is not None
+            for i in range(window.navigation.count())
+        )
+        == 8
+    )
     assert window.palette().window().color().lightness() > 200
     pages = [window.search_tabs.widget(i) for i in range(4)]
     window.roblox.manual.setPlainText("KeepThisDraft")
     for row in range(window.navigation.count()):
         item = window.navigation.item(row)
+        if item.data(Qt.ItemDataRole.UserRole) is None:
+            continue
         qtbot.mouseClick(
             window.navigation.viewport(),
             Qt.MouseButton.LeftButton,

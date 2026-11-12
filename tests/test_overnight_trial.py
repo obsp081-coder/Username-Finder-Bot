@@ -6,6 +6,7 @@ import time
 from collections import Counter
 from urllib.parse import parse_qs, urlsplit
 
+from legacy_roblox_shell import MainWindow
 from PySide6.QtWidgets import QMessageBox
 from test_multi_jobs import select
 from test_roblox import response as roblox_response
@@ -13,7 +14,6 @@ from test_x import Clock
 from test_x import response as x_response
 
 from username_finder import roblox_ui, x, x_ui
-from username_finder.gui import MainWindow
 from username_finder.overnight_preflight_ui import OvernightPreflightDialog
 from username_finder.roblox_runner import RobloxRunner
 from username_finder.windows_awake import AwakeRequest

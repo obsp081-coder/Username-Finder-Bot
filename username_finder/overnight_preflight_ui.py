@@ -15,9 +15,11 @@ class OvernightPreflightDialog(QDialog):
         self.resize(740, 510)
         self.checks = {}
         self.results = []
-        self.identities = {name: panel.current_run for name, panel in manager.panels.items()}
+        self.identities = {
+            name: panel.current_run for name, panel in manager.panels.items() if hasattr(panel, "overnight")
+        }
         selected = manager.selected()
-        if selected:
+        if selected and selected["platform"] in self.identities:
             self.identities[selected["platform"]] = selected["id"]
         layout = QVBoxLayout(self)
         note = QLabel(

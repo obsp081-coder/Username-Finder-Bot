@@ -9,6 +9,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QPoint, QRect, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 from test_multi_jobs import concurrent_window as concurrent_window
@@ -17,7 +18,6 @@ from test_roblox import response
 from test_x import Clock
 
 from username_finder import roblox_ui
-from username_finder.gui import MainWindow
 from username_finder.overnight_preflight_ui import OvernightPreflightDialog
 from username_finder.roblox import input_spec
 from username_finder.roblox_runner import RobloxRunner

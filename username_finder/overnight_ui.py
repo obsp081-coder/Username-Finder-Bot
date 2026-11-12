@@ -145,4 +145,5 @@ def schedule_startup_recovery(window):
     # Once per application launch, after both platform repositories recovered uncertain tasks.
     # No polling, no restricted-job probing, and no automatic restart after Stop.
     for panel in (window.roblox, window.x_panel):
-        QTimer.singleShot(0, panel.overnight.resume_after_launch)
+        if hasattr(panel, "overnight"):
+            QTimer.singleShot(0, panel.overnight.resume_after_launch)

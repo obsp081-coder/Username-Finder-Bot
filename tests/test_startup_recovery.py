@@ -6,12 +6,12 @@ import time
 from contextlib import contextmanager
 
 import pytest
+from legacy_roblox_shell import MainWindow
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QMessageBox
 from test_reliability_stress import memory_bytes
 
 from username_finder import x
-from username_finder.gui import MainWindow
 from username_finder.overnight import OvernightStore
 from username_finder.overnight_preflight import JobIntent, check_job
 from username_finder.roblox_storage import RobloxStore

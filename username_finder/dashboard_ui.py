@@ -96,8 +96,8 @@ class DashboardPanel(QScrollArea):
         actions_card = Card("ابدأ عملًا جديدًا", "generate", shadow=True)
         self.quick_actions = [
             ActionCard("استيراد ملف", "أسماء TXT / CSV", "import", lambda: self.open_roblox(imported=True)),
-            ActionCard("فحص أسماء", "الفحص الفردي الأولي", "search", self.open_roblox),
-            ActionCard("تصفية ملفات كبيرة", "دليل حسابات Bulk", "filter", self.open_prefilter),
+            ActionCard("فحص أسماء", "RoValid · تحقق أولي", "search", self.open_roblox),
+            ActionCard("نمط RoValid السريع", "Bulk ثم Validator", "filter", self.open_prefilter),
             ActionCard(
                 "توليد أسماء",
                 "إنشاء ملف بقواعدك",
@@ -190,8 +190,9 @@ class DashboardPanel(QScrollArea):
         for panel in (window.roblox, window.x_panel):
             panel.progress_changed.connect(self.queue_refresh)
             panel.idle.connect(self.queue_refresh)
-        window.roblox.prefilter.progress_changed.connect(self.queue_refresh)
-        window.roblox.bulk.changed.connect(self.queue_refresh)
+        if hasattr(window.roblox, "prefilter"):
+            window.roblox.prefilter.progress_changed.connect(self.queue_refresh)
+            window.roblox.bulk.changed.connect(self.queue_refresh)
         window.job_manager.view_changed.connect(self.queue_refresh)
 
     def open_platform(self, panel, page):
@@ -202,14 +203,16 @@ class DashboardPanel(QScrollArea):
         panel = self.window.roblox
         if not panel.busy:
             panel.checking_mode.setCurrentIndex(0)
-            panel.modes.setCurrentIndex(1 if imported else 0)
+            source = panel.source if hasattr(panel, "source") else panel.modes
+            source.setCurrentIndex(1 if imported else 0)
             panel.workspace.setCurrentIndex(0)
         self.window.tabs.setCurrentWidget(panel)
 
     def open_prefilter(self):
         panel = self.window.roblox
         if not panel.busy:
-            panel.checking_mode.setCurrentIndex(2)
+            panel.checking_mode.setCurrentIndex(0 if hasattr(panel, "source") else 2)
+            panel.workspace.setCurrentIndex(0)
         self.window.tabs.setCurrentWidget(panel)
 
     def queue_refresh(self, *_):
@@ -257,14 +260,22 @@ class DashboardPanel(QScrollArea):
             for field, value in zip(self.latest_values, values, strict=True):
                 field.setText(value)
         data = []
-        for name, table, timestamp, evidence in (
-            ("Roblox", window.roblox.result_table, 3, 6),
-            ("X", window.x_panel.table, 2, 5),
-        ):
+        for name, table, timestamp, evidence in (("X", window.x_panel.table, 2, 5),):
             for row in range(min(2, table.rowCount())):
                 items = [table.item(row, c) for c in (0, 1, timestamp, evidence)]
                 if all(items):
                     data.append([items[0].text(), name, items[1].text(), items[2].text(), items[3].text()])
+        table = window.roblox.result_table
+        for row in range(min(2, table.rowCount())):
+            data.append(
+                [
+                    table.item(row, 0).text(),
+                    "Roblox · RoValid",
+                    table.item(row, 1).text(),
+                    "غير محفوظ لكل اسم",
+                    table.item(row, 2).text(),
+                ]
+            )
         if data != self._last_results:
             self.result_columns.fill(data)
             self._last_results = data
