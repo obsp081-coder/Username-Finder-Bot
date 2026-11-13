@@ -105,10 +105,12 @@ def fetch_pool(database, wizard):
     from proxy import prescreen
     from rich.console import Console
 
-    if not rovalid.permission(database)["allowed"]:
+    if not rovalid.permission(database, mode="two_stage", connection="sources")["allowed"]:
         raise ValueError("Proxy screening unavailable under historical Roblox restrictions")
     with RobloxActivity(database):
-        if not rovalid.permission(database, lock_held=True)["allowed"]:
+        if not rovalid.permission(database, mode="two_stage", connection="sources", lock_held=True)[
+            "allowed"
+        ]:
             raise ValueError("Roblox screening restricted")
         original = wizard.console
         wizard.console = Console(file=io.StringIO())
@@ -155,8 +157,14 @@ def run_engine(directory, database, packet, checker, config):
     ):
         raise ValueError("Unsafe recovery state; manual review required")
     # Read only the original database. No Store constructor, migration, recover(), or legacy job dispatch.
+    mode = rovalid.settings(record["settings"])["mode"]
+    connection = (
+        "sources" if packet.get("scraped") is True else "private" if packet.get("proxies") else "direct"
+    )
+    if not rovalid.permission(database, mode=mode, connection=connection)["allowed"]:
+        raise ValueError("Mode and connection require explicit reviewed authorization")
     with RobloxActivity(database) as guard:
-        status = rovalid.permission(database, lock_held=True)
+        status = rovalid.permission(database, mode=mode, connection=connection, lock_held=True)
         if not status["allowed"]:
             raise ValueError("Legacy safety restrictions require review")
         stop_requested = threading.Event()
@@ -192,6 +200,9 @@ def run_engine(directory, database, packet, checker, config):
             latest.update({key: value for key, value in values.items() if type(value) in (int, float, bool)})
             if latest.get("ratelimited", 0):
                 guard.restrict("rovalid_review_required")
+                stop_requested.set()
+                for stop in stop_objects:
+                    stop.requested, stop.reason = True, "provider_restriction_review"
             record["progress"] = dict(latest)
             rovalid.atomic_json(directory / "run.json", record)
             emit("progress", data=latest)

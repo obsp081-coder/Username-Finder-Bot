@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from username_finder import rovalid, rovalid_child
+from username_finder import rovalid, rovalid_child, rovalid_review
 from username_finder.roblox_activity import RobloxActivity
 from username_finder.storage import Store
 
@@ -19,8 +19,19 @@ from username_finder.storage import Store
 @pytest.fixture
 def database(tmp_path, monkeypatch):
     # Simulate a future separately reviewed installation, only against temporary data/mocks.
-    monkeypatch.setattr(rovalid, "HISTORICAL_REVIEW_REQUIRED", False)
     store = Store(tmp_path / "legacy.db")
+    for mode in rovalid_review.MODES:
+        for connection in rovalid_review.CONNECTIONS:
+            state = rovalid.permission(store.path, mode=mode, connection=connection)
+            rovalid_review.record_review(
+                store.path,
+                mode=mode,
+                connection=connection,
+                decision="authorize",
+                reviewer="Offline test",
+                evidence="Synthetic temporary fixture only",
+                fingerprint=state["fingerprint"],
+            )
     yield store.path
     store.close()
 
@@ -72,8 +83,28 @@ def test_source_hashes_and_required_files():
     assert "GNU GENERAL PUBLIC LICENSE" in (rovalid.SOURCE / "LICENSE").read_text()
 
 
+@pytest.mark.parametrize("mode", ["two_stage", "validator"])
+def test_new_429_invalidates_review_and_requests_managed_stop(tmp_path, database, engine, monkeypatch, mode):
+    checker, config, _ = engine
+    directory, _ = prepared(tmp_path, engine, options=dict(mode=mode))
+
+    async def restricted(*args):
+        stop = checker._StopRequest()
+        checker.live_card(ratelimited=1, requests=1)
+        assert stop.requested and stop.reason == "provider_restriction_review"
+
+    monkeypatch.setattr(checker, "_run_rounds_owned", restricted)
+    monkeypatch.setattr(checker.aiohttp, "ClientSession", lambda **kw: pytest.fail("No dispatch"))
+    monkeypatch.setattr(sys, "stdin", Commands())
+    monkeypatch.setattr(rovalid_child, "emit", lambda *a, **kw: None)
+    rovalid_child.run_engine(directory, database, {}, checker, config)
+    assert RobloxActivity(database).block.read_bytes() == b"rovalid_review_required"
+    assert rovalid.read_json(directory / "run.json")["state"] == "Stopped"
+    for other in rovalid_review.MODES:
+        assert not rovalid.permission(database, mode=other)["allowed"]
+
+
 def test_shipped_integration_requires_historical_review_even_with_fresh_runtime(tmp_path):
-    assert rovalid.HISTORICAL_REVIEW_REQUIRED
     assert not rovalid.permission(tmp_path / "fresh.db")["allowed"]
 
 
@@ -323,6 +354,17 @@ def test_stop_save_and_explicit_unresolved_recovery_no_completed_replay(
     second = Commands()
     monkeypatch.setattr(sys, "stdin", second)
     calls2 = transport(monkeypatch, checker)
+    state = rovalid.permission(database, mode="validator")
+    assert not state["allowed"]  # Durable marker history changed after the first session.
+    rovalid_review.record_review(
+        database,
+        mode="validator",
+        connection="direct",
+        decision="authorize",
+        reviewer="Offline test",
+        evidence="Reviewed completed cleanup and saved stop",
+        fingerprint=state["fingerprint"],
+    )
     rovalid_child.run_engine(directory, database, dict(resume=True), checker, config)
     second.queue.put("stop\n")
     assert calls == [("validator", "TakenName"), ("validator", "FreeName")]

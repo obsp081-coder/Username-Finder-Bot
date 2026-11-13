@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLineEdit,
     QMessageBox,
     QProgressBar,
@@ -32,6 +33,7 @@ from . import rovalid
 from .roblox_storage import RobloxStore
 from .rovalid_filters_ui import ResultFilterPanel
 from .rovalid_proxy_ui import PrivateProxyEdit
+from .rovalid_review_ui import review_dialog
 from .ui_cards import Card, PageHeading, caption
 
 
@@ -151,6 +153,9 @@ class RoValidPanel(QWidget):
         self.checking_mode = QComboBox()
         self.checking_mode.addItem("RoValid السريع — Bulk ثم Validator", "two_stage")
         self.checking_mode.addItem("Validator فقط", "validator")
+        self.checking_mode.currentIndexChanged.connect(
+            lambda: self.controls() if hasattr(self, "start_button") else None
+        )
         form.addRow("النمط", self.checking_mode)
         self.concurrency = QSpinBox()
         self.concurrency.setRange(1, 2000)
@@ -206,12 +211,14 @@ class RoValidPanel(QWidget):
         self.stop_button = QPushButton("إيقاف وحفظ")
         self.stop_button.setObjectName("danger")
         self.restriction_button = QPushButton("تحقق من القيد — محلي فقط")
+        self.review_button = QPushButton("مراجعة القيد وتسجيل القرار")
         for index, (button, callback) in enumerate(
             (
                 (self.start_button, self.start),
                 (self.resume_button, self.resume),
                 (self.stop_button, self.stop),
                 (self.restriction_button, self.controls),
+                (self.review_button, self.review_restriction),
             )
         ):
             button.clicked.connect(callback)
@@ -350,15 +357,61 @@ class RoValidPanel(QWidget):
         self.previous_results.setEnabled(not active and self.result_offset > 0)
         self.next_results.setEnabled(not active and self.result_offset + 500 < self.result_total)
         self.prepare_button.setEnabled(not active)
-        permission = rovalid.permission(self.store.path) if not active else dict(allowed=False, reason="")
+        permission = self.current_permission() if not active else dict(allowed=False, reason="")
         self.checking_allowed = permission["allowed"]
         self.restriction.setText(permission["reason"] or "عملية محلية جارية؛ لا بدء ثانٍ.")
-        allowed = permission["allowed"] and not active
-        self.proxy_fetch.setEnabled(allowed and self.proxy_mode.currentData() == "sources")
+        effective = self.current_permission(saved=True) if not active else permission
+        allowed = effective["allowed"] and not active
+        if (
+            not active
+            and self.record
+            and self.record.get("settings", {}).get("mode") != self.checking_mode.currentData()
+        ):
+            self.restriction.setText(
+                permission["reason"] + "\nإذن العملية المحفوظة للاستئناف:\n" + effective["reason"]
+            )
+        self.review_button.setEnabled(not active)
+        fetch_allowed = (
+            rovalid.permission(self.store.path, mode="two_stage", connection="sources")["allowed"]
+            if not active
+            else False
+        )
+        self.proxy_fetch.setEnabled(fetch_allowed and self.proxy_mode.currentData() == "sources")
         self.start_button.setEnabled(allowed and self.record.get("state") == "Prepared")
         self.resume_button.setEnabled(allowed and self.record.get("state") in ("Stopped", "Completed"))
         self.stop_button.setEnabled(self.busy and not self.stopping)
         self.progress_changed.emit()
+
+    def connection_scope(self):
+        mode = self.proxy_mode.currentData()
+        return "private" if mode in ("file", "manual") else mode
+
+    def current_permission(self, *, saved=False):
+        mode = (
+            self.record.get("settings", {}).get("mode", self.checking_mode.currentData())
+            if saved
+            else self.checking_mode.currentData()
+        )
+        return rovalid.permission(self.store.path, mode=mode, connection=self.connection_scope())
+
+    def review_restriction(self):
+        if self.busy or self.closing:
+            return
+        mode = self.checking_mode.currentData()
+        if self.connection_scope() == "sources" and mode == "validator":
+            target, accepted = QInputDialog.getItem(
+                self,
+                "نطاق مراجعة المصادر",
+                "قرار مستقل لكل نطاق:",
+                ["فحص Validator عبر المصادر", "جلب المصادر وفحص اتصال Bulk"],
+                0,
+                False,
+            )
+            if not accepted:
+                return
+            mode = "two_stage" if target == "جلب المصادر وفحص اتصال Bulk" else "validator"
+        review_dialog(self, self.store.path, mode, self.connection_scope())
+        self.controls()
 
     def prepare(self):
         if self.busy or self.closing:
@@ -407,7 +460,11 @@ class RoValidPanel(QWidget):
         self.proxy_validate.setVisible(mode in ("file", "manual"))
         self.remove_bad.setVisible(mode != "direct")
         self.proxy_fetch.setVisible(mode == "sources")
-        status = rovalid.permission(self.store.path) if mode == "sources" else None
+        status = (
+            rovalid.permission(self.store.path, mode="two_stage", connection="sources")
+            if mode == "sources"
+            else None
+        )
         self.proxy_fetch.setEnabled(bool(status and status["allowed"]) and not self.busy)
         if mode == "sources":
             self.proxy_notice.setText(
@@ -416,6 +473,8 @@ class RoValidPanel(QWidget):
             )
         else:
             self.proxy_notice.setText("لا إرسال تلقائي؛ فحص الصيغة لا يثبت اتصالًا أو صحة نتائج Roblox.")
+        if hasattr(self, "start_button"):
+            self.controls()
 
     def validate_proxy_input(self):
         try:
@@ -426,7 +485,7 @@ class RoValidPanel(QWidget):
     def fetch_proxies(self):
         if self.busy or self.closing:
             return
-        status = rovalid.permission(self.store.path)
+        status = rovalid.permission(self.store.path, mode="two_stage", connection="sources")
         if not status["allowed"]:
             self.proxy_notice.setText(status["reason"])
             return
@@ -450,7 +509,7 @@ class RoValidPanel(QWidget):
     def _start(self, resume):
         if self.busy or self.closing or not self.current_run:
             return
-        permission = rovalid.permission(self.store.path)
+        permission = self.current_permission(saved=True)
         if not permission["allowed"]:
             self.restriction.setText(permission["reason"])
             return

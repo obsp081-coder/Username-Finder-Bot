@@ -17,16 +17,12 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from .roblox_local_selection import spreadsheet_row
-from .roblox_restriction import checking_permission
 from .roblox_storage import RobloxStore
 from .rovalid_filters import parse_filters
 from .vendor.rovalid.config import is_valid_username
 
 SOURCE = Path(__file__).parent / "vendor" / "rovalid"
 REVISION = "d9cba38980fa13a33cc5b874c989105f8b9ff27f"
-# The integration task explicitly records an unresolved historical provider restriction.
-# A fresh runtime directory is not evidence of permission. No UI/CLI override is provided.
-HISTORICAL_REVIEW_REQUIRED = True
 DEFAULTS = dict(
     source="generate",
     length=4,
@@ -124,18 +120,10 @@ def readonly_repo(database):
         db.close()
 
 
-def permission(database, *, lock_held=False):
-    if HISTORICAL_REVIEW_REQUIRED:
-        return dict(
-            allowed=False,
-            reason="RoValid محجوب: قيد Roblox HTTP 429 التاريخي غير محلول؛ "
-            "يلزم تدقيق وتفويض مستقل قبل التشغيل الحي. المعاينة والسجل والتصدير محلية ومتاحة.",
-        )
-    try:
-        with readonly_repo(database) as repo:
-            return checking_permission(repo, purpose="bulk", lock_held=lock_held)
-    except (OSError, ValueError, sqlite3.Error):
-        return dict(allowed=False, reason="تعذر تدقيق حالة Roblox القديمة؛ التشغيل ممنوع حتى المراجعة.")
+def permission(database, *, mode="two_stage", connection="direct", lock_held=False):
+    from .rovalid_review import permission as reviewed_permission
+
+    return reviewed_permission(database, mode=mode, connection=connection, lock_held=lock_held)
 
 
 def proxy_entries(proxies):

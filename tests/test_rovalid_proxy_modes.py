@@ -8,7 +8,7 @@ import pytest
 from test_rovalid import database as database
 from test_rovalid import engine as engine
 
-from username_finder import rovalid, rovalid_child
+from username_finder import rovalid, rovalid_child, rovalid_review
 from username_finder.roblox_activity import RobloxActivity
 
 
@@ -74,7 +74,7 @@ def test_fetch_rejected_before_any_source_or_screen_call(database, engine, monke
     elif kind == "cooldown":
         guard.cooldown.write_bytes(b"bad\n")
     else:
-        monkeypatch.setattr(rovalid, "HISTORICAL_REVIEW_REQUIRED", True)
+        monkeypatch.setattr(rovalid_review, "journal", lambda _: [])
     original = {p: p.read_bytes() for p in (guard.block, guard.pending, guard.cooldown) if p.exists()}
     scrape = AsyncMock(side_effect=AssertionError("No external calls"))
     monkeypatch.setattr(wizard, "_scrape_proxies", scrape)

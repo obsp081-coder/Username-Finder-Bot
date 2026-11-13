@@ -8,7 +8,7 @@ from PySide6.QtCore import QTimer
 from test_rovalid_ui import desktop as desktop
 from test_rovalid_ui import wait_idle
 
-from username_finder import rovalid
+from username_finder import rovalid, rovalid_review
 
 
 def test_four_proxy_controls_manual_multiline_file_and_privacy(desktop, tmp_path):
@@ -39,7 +39,7 @@ def test_four_proxy_controls_manual_multiline_file_and_privacy(desktop, tmp_path
 
 def test_fetch_unavailable_and_direct_handler_gated(desktop, monkeypatch):
     panel = desktop.roblox
-    monkeypatch.setattr(rovalid, "HISTORICAL_REVIEW_REQUIRED", True)
+    monkeypatch.setattr(rovalid_review, "journal", lambda _: [])
     monkeypatch.setattr(panel, "launch", lambda *a: pytest.fail("No child dispatch"))
     panel.proxy_mode.setCurrentIndex(3)
     assert not panel.proxy_fetch.isEnabled()

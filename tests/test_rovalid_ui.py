@@ -4,7 +4,7 @@ import pytest
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 
-from username_finder import rovalid
+from username_finder import rovalid, rovalid_review
 from username_finder.gui import MainWindow
 from username_finder.roblox_activity import RobloxActivity
 from username_finder.rovalid_ui import RoValidPanel
@@ -14,7 +14,23 @@ from username_finder.rovalid_ui import RoValidPanel
 def desktop(qtbot, tmp_path, monkeypatch):
     # Allowed-path tests simulate review only in this process; production ships blocked.
     # Managed children inherit no override and remain independently fail-closed.
-    monkeypatch.setattr(rovalid, "HISTORICAL_REVIEW_REQUIRED", False)
+    # Mock only parent reviews; real children never inherit an authorization.
+    original = rovalid_review.journal
+
+    def parent_review(database):
+        records = original(database)
+        snapshot = rovalid_review.inspect(database)
+        return records + [
+            dict(
+                scope=rovalid_review.scope(mode, connection),
+                decision="authorize",
+                fingerprint=snapshot["fingerprint"],
+            )
+            for mode in rovalid_review.MODES
+            for connection in rovalid_review.CONNECTIONS
+        ]
+
+    monkeypatch.setattr(rovalid_review, "journal", parent_review)
     monkeypatch.setattr(MainWindow, "unsaved_choice", lambda _: QMessageBox.StandardButton.Discard)
     window = MainWindow(tmp_path / "test.db")
     window.timer.stop()
