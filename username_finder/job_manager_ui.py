@@ -351,11 +351,9 @@ class JobManagerPanel(QWidget):
                     if panel.stopping and panel.busy
                     else "نشطة"
                     if panel.busy
-                    else "مراجعة RoValid مطلوبة"
-                    if hasattr(panel, "checking_allowed") and not panel.checking_allowed
                     else "متوقفة بقيد"
                     if panel.repo.control().get("blocked")
-                    else "جاهزة"
+                    else "خاملة"
                 )
                 for name, panel in self.panels.items()
             )

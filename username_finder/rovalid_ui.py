@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLineEdit,
     QMessageBox,
     QProgressBar,
@@ -33,7 +32,6 @@ from . import rovalid
 from .roblox_storage import RobloxStore
 from .rovalid_filters_ui import ResultFilterPanel
 from .rovalid_proxy_ui import PrivateProxyEdit
-from .rovalid_review_ui import review_dialog
 from .ui_cards import Card, PageHeading, caption
 
 
@@ -63,8 +61,6 @@ class RoValidPanel(QWidget):
         layout.addWidget(
             PageHeading("Roblox · RoValid", "محرك مستقل • نتائج إتاحة أولية لا تضمن التسجيل", "roblox")
         )
-        self.restriction = caption("", "notice")
-        layout.addWidget(self.restriction)
         self.workspace = QTabWidget()
         layout.addWidget(self.workspace, 1)
         page = QWidget()
@@ -210,15 +206,11 @@ class RoValidPanel(QWidget):
         self.resume_button = QPushButton("استئناف غير المحسوم بتأكيد")
         self.stop_button = QPushButton("إيقاف وحفظ")
         self.stop_button.setObjectName("danger")
-        self.restriction_button = QPushButton("تحقق من القيد — محلي فقط")
-        self.review_button = QPushButton("مراجعة القيد وتسجيل القرار")
         for index, (button, callback) in enumerate(
             (
                 (self.start_button, self.start),
                 (self.resume_button, self.resume),
                 (self.stop_button, self.stop),
-                (self.restriction_button, self.controls),
-                (self.review_button, self.review_restriction),
             )
         ):
             button.clicked.connect(callback)
@@ -357,20 +349,10 @@ class RoValidPanel(QWidget):
         self.previous_results.setEnabled(not active and self.result_offset > 0)
         self.next_results.setEnabled(not active and self.result_offset + 500 < self.result_total)
         self.prepare_button.setEnabled(not active)
-        permission = self.current_permission() if not active else dict(allowed=False, reason="")
-        self.checking_allowed = permission["allowed"]
-        self.restriction.setText(permission["reason"] or "عملية محلية جارية؛ لا بدء ثانٍ.")
-        effective = self.current_permission(saved=True) if not active else permission
+        effective = self.current_permission(saved=True) if not active else dict(allowed=False, reason="")
         allowed = effective["allowed"] and not active
-        if (
-            not active
-            and self.record
-            and self.record.get("settings", {}).get("mode") != self.checking_mode.currentData()
-        ):
-            self.restriction.setText(
-                permission["reason"] + "\nإذن العملية المحفوظة للاستئناف:\n" + effective["reason"]
-            )
-        self.review_button.setEnabled(not active)
+        for control in (self.start_button, self.resume_button):
+            control.setToolTip(effective["reason"] if not allowed else "")
         fetch_allowed = (
             rovalid.permission(self.store.path, mode="two_stage", connection="sources")["allowed"]
             if not active
@@ -393,25 +375,6 @@ class RoValidPanel(QWidget):
             else self.checking_mode.currentData()
         )
         return rovalid.permission(self.store.path, mode=mode, connection=self.connection_scope())
-
-    def review_restriction(self):
-        if self.busy or self.closing:
-            return
-        mode = self.checking_mode.currentData()
-        if self.connection_scope() == "sources" and mode == "validator":
-            target, accepted = QInputDialog.getItem(
-                self,
-                "نطاق مراجعة المصادر",
-                "قرار مستقل لكل نطاق:",
-                ["فحص Validator عبر المصادر", "جلب المصادر وفحص اتصال Bulk"],
-                0,
-                False,
-            )
-            if not accepted:
-                return
-            mode = "two_stage" if target == "جلب المصادر وفحص اتصال Bulk" else "validator"
-        review_dialog(self, self.store.path, mode, self.connection_scope())
-        self.controls()
 
     def prepare(self):
         if self.busy or self.closing:
@@ -511,7 +474,7 @@ class RoValidPanel(QWidget):
             return
         permission = self.current_permission(saved=True)
         if not permission["allowed"]:
-            self.restriction.setText(permission["reason"])
+            self.activity_status.setText(permission["reason"])
             return
         if self.record.get("state") not in (("Stopped", "Completed") if resume else ("Prepared",)):
             return

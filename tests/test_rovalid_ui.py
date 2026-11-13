@@ -122,9 +122,9 @@ def test_historical_block_status_and_direct_start_are_read_only(desktop, monkeyp
     panel.current_run = "a" * 32
     panel.record = dict(state="Prepared", settings=panel.options())
     panel.controls()
-    assert "تاريخي" in panel.restriction.text() and "429" in panel.restriction.text()
+    assert "تاريخي" in panel.start_button.toolTip() and "429" in panel.start_button.toolTip()
     desktop.job_manager.refresh()
-    assert "مراجعة RoValid مطلوبة" in desktop.job_manager.summary.text()
+    assert "مراجعة RoValid مطلوبة" not in desktop.job_manager.summary.text()
     assert not panel.start_button.isEnabled() and not panel.resume_button.isEnabled()
     panel.start()
     panel.resume()

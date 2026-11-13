@@ -1,7 +1,7 @@
-import threading
+"""No ordinary restriction-recovery UI; X engine guards and historical audits remain unchanged."""
 
-from test_x import response
-from test_x_ui import wait_done
+import pytest
+from PySide6.QtWidgets import QPushButton
 from test_x_ui import window as window
 
 from username_finder import x
@@ -21,88 +21,74 @@ def seed_restriction(panel):
     return identity, clock
 
 
-def test_two_confirmations_no_auto_resume_and_new_job_after_release(window, qtbot, monkeypatch):
+def test_recovery_controls_handlers_and_polling_are_removed(window):
     panel = window.x_panel
-    old, clock = seed_restriction(panel)
-    original = panel.repo.progress(old)
-    assert panel.recovery_check_button.isEnabled() and not panel.start_button.isEnabled()
-    assert "HTTP: 429" in panel.restriction.text()
-    assert "وقت القيد" in panel.restriction.text()
-    monkeypatch.setattr(panel, "_confirm", lambda _: False)
-    panel.recovery_check_button.click()
-    assert not clock.calls and not panel.recovery.events()
-    monkeypatch.setattr(panel, "_confirm", lambda _: True)
-    panel.recovery_check_button.click()
-    wait_done(qtbot, panel)
-    assert [name for name, _ in clock.calls] == ["OpenAI"]
-    assert panel.repo.control()["blocked"] and not panel.start_button.isEnabled()
-    assert not panel.recovery_release_button.isEnabled()
-    assert "نجح طلب واحد" in panel.recovery_label.text()
+    for name in (
+        "restriction",
+        "review_restriction_button",
+        "recovery_check_button",
+        "recovery_release_button",
+        "recovery_label",
+        "recovery_timer",
+        "check_recovery",
+        "release_restriction",
+        "review_restriction",
+        "restriction_text",
+    ):
+        assert not hasattr(panel, name)
+    labels = {button.text() for button in panel.findChildren(QPushButton)}
+    assert not {"مراجعة دليل قيد X — دون اتصال", "طلب استعادة X واحد…", "تحرير القيد يدويًا…"} & labels
+
+
+def test_refresh_and_direct_actions_never_release_or_probe_a_saved_restriction(window, qtbot):
+    panel = window.x_panel
+    identity, clock = seed_restriction(panel)
+    before = (
+        panel.repo.progress(identity),
+        panel.repo.control(),
+        panel.repo.history("first_old"),
+        panel.recovery.events(),
+    )
+    for action in (
+        panel.controls,
+        panel.refresh,
+        panel.start,
+        panel.resume,
+        panel.recheck_all,
+        panel.recheck_selected,
+    ):
+        action()
+    qtbot.wait(40)
+    assert not panel.start_button.isEnabled() and not panel.resume_button.isEnabled()
+    assert "unexpected_http_status:429" in panel.status.text()
+    assert not clock.calls
+    assert before == (
+        panel.repo.progress(identity),
+        panel.repo.control(),
+        panel.repo.history("first_old"),
+        panel.recovery.events(),
+    )
+
+
+def test_historical_successful_probe_is_not_implicitly_released_by_ui_refresh(window):
+    panel = window.x_panel
+    identity, clock = seed_restriction(panel)
+    panel.recovery.check(confirmed=True, fetcher=panel.fetcher)
     clock.seconds += 5
-    panel.controls()
-    assert panel.recovery_release_button.isEnabled()
-    assert "بانتظار إقرار" in panel.recovery_label.text()
-    monkeypatch.setattr(panel, "_confirm", lambda _: False)
-    panel.recovery_release_button.click()
-    assert panel.repo.control()["blocked"]
-    monkeypatch.setattr(panel, "_confirm", lambda _: True)
-    panel.recovery_release_button.click()
-    assert not panel.repo.control()["blocked"]
-    assert panel.speed.currentData() == 5
-    assert "حُرر القيد" in panel.recovery_label.text()
-    assert panel.repo.progress(old) == original
-    assert not panel.start_button.isEnabled() and len(clock.calls) == 1
-    panel.quantity.setText("2")
-    panel.preview()
-    wait_done(qtbot, panel)
-    new = panel.current_run
-    assert panel.repo.progress(new)["interval_seconds"] == 5 and panel.start_button.isEnabled()
-    panel.start_button.click()
-    wait_done(qtbot, panel)
-    assert panel.repo.progress(new)["state"] == "Completed"
-    assert len(clock.calls) == len({name for name, _ in clock.calls}) == 3
-    assert panel.repo.progress(old) == original
-    assert panel.recovery.events()[0]["released_at"]
+    before = panel.recovery.events(), panel.repo.control(), panel.repo.progress(identity)
+    panel.refresh()
+    assert before == (panel.recovery.events(), panel.repo.control(), panel.repo.progress(identity))
+    assert panel.repo.control()["blocked"] and not panel.start_button.isEnabled()
+    assert len(clock.calls) == 1
 
 
-def test_wait_and_failed_probe_keep_start_and_release_disabled(window, qtbot, monkeypatch):
-    panel = window.x_panel
-    _, clock = seed_restriction(panel)
-    monkeypatch.setattr(panel, "_confirm", lambda _: True)
-    panel.fetcher = lambda *a: x.protocol.Response(429, b"", {"retry-after": "120"})
-    panel.recovery_check_button.click()
-    wait_done(qtbot, panel)
-    assert not panel.recovery_check_button.isEnabled()
-    assert not panel.recovery_release_button.isEnabled() and not panel.start_button.isEnabled()
-    clock.seconds += 119
-    panel.controls()
-    assert not panel.recovery_check_button.isEnabled()
-    clock.seconds += 1
-    panel.controls()
-    assert panel.recovery_check_button.isEnabled() and "فشل طلب الاستعادة" in panel.recovery_label.text()
-    assert len(panel.recovery.events()) == 1 and panel.repo.control()["blocked"]
-
-
-def test_stop_recovery_keeps_audit_and_latch_without_retry(window, qtbot, monkeypatch):
+@pytest.mark.parametrize("size", [(900, 650), (1180, 850)])
+def test_x_operations_layout_keeps_history_and_actual_error(window, qtbot, size):
     panel = window.x_panel
     seed_restriction(panel)
-    entered = threading.Event()
-    calls = []
-
-    def fetch(*args):
-        calls.append(args)
-        entered.set()
-        assert panel.cancel.wait(3)
-        return response(False, "taken")
-
-    panel.fetcher = fetch
-    monkeypatch.setattr(panel, "_confirm", lambda _: True)
-    panel.check_recovery()
-    qtbot.waitUntil(entered.is_set)
-    qtbot.waitUntil(lambda: "جارٍ طلب استعادة" in panel.recovery_label.text())
-    assert not panel.start_button.isEnabled() and not panel.recovery_check_button.isEnabled()
-    assert not panel.connection_mode.isEnabled() and panel.stop_button.isEnabled()
-    panel.stop_button.click()
-    wait_done(qtbot, panel)
-    assert len(calls) == 1 and panel.recovery.events()[0]["state"] == "Cancelled"
-    assert panel.repo.control()["blocked"]
+    window.resize(*size)
+    window.tabs.setCurrentWidget(panel)
+    panel.workspace.setCurrentIndex(2)
+    qtbot.wait(20)
+    assert (window.width(), window.height()) == size
+    assert panel.operations.isVisible() and "429" in panel.status.text()

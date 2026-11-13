@@ -86,12 +86,8 @@ def test_local_restriction_review_displays_evidence_without_releasing_or_request
     control = panel.repo.control()
     panel.current_run = identity
     panel.refresh()
-    assert "نهاية القيد غير معروفة" in panel.restriction.text()
-    assert ("أدنى موعد انتظار معلن" in panel.restriction.text()) is bool(headers)
-    dialogs = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: dialogs.append(args[-1]))
-    panel.review_restriction_button.click()
-    assert len(dialogs) == 1 and "unexpected_http_status:429" in dialogs[0]
+    assert not hasattr(panel, "restriction") and not hasattr(panel, "review_restriction_button")
+    assert "unexpected_http_status:429" in panel.status.text()
     assert panel.repo.progress(identity) == original
     assert panel.repo.history("valid_name") == history
     assert panel.repo.control() == control
@@ -176,7 +172,7 @@ def test_reproduce_ready_20_disabled_by_previous_global_429(window, qtbot):
     assert panel.repo.progress(new)["spec"] == saved["spec"]
     assert panel.repo.control()["blocked"] == blocked
     assert not panel.start_button.isEnabled() and not panel.resume_button.isEnabled()
-    assert not panel.restriction.isHidden() and blocked in panel.restriction.text()
+    assert not hasattr(panel, "restriction") and blocked in panel.status.text()
     assert "0 ثانية" in panel.job_settings.text() and "2 ثانية" in panel.job_settings.text()
     panel.start()
     assert len(panel.repo.runs()) == 2

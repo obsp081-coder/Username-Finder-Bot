@@ -160,8 +160,7 @@ def test_native_remaining_page_states(desktop, qtbot, tmp_path, width, height):
     panel.refresh()
     assert panel.repo.control()["blocked"]
     assert not panel.start_button.isEnabled()
-    capture("x-restricted", panel, panel.workspace.currentWidget(), panel.restriction)
-    capture("x-recovery-actions", panel, panel.workspace.currentWidget(), panel.recovery_check_button)
+    capture("x-restricted", panel, panel.workspace.currentWidget(), panel.status)
     panel.workspace.setCurrentIndex(3)
     capture("x-connection", panel)
 

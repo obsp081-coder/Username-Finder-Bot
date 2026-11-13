@@ -47,7 +47,7 @@ STATES = {
     "Ready": "جاهزة",
     "Running": "جارٍ الفحص",
     "Paused": "متوقفة — قابلة للاستئناف",
-    "Restricted": "متوقفة للمراجعة",
+    "Restricted": "متوقفة بقيد محفوظ",
     "Completed": "مكتملة",
     "Error": "خطأ",
 }
@@ -65,9 +65,6 @@ class XPanel(QScrollArea):
         self.repo = XStore(store)
         self.repo.recover()
         self.recovery = XRecovery(self.repo)
-        self.recovery_timer = QTimer(self)
-        self.recovery_timer.setInterval(1000)
-        self.recovery_timer.timeout.connect(self.controls)
         self.make_table, self.fill_table = make_table, fill_table
         self.fetcher = fetcher
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="x-check")
@@ -106,7 +103,7 @@ class XPanel(QScrollArea):
         root_layout.addWidget(self.workspace, 1)
         input_layout = self.workspace.add_page("الأسماء والإعدادات")
         results_layout = self.workspace.add_page("النتائج", expand=True)
-        history_layout = self.workspace.add_page("العمليات والاستعادة")
+        history_layout = self.workspace.add_page("العمليات والسجل")
         connection_page = self.workspace.add_page("الاتصال والتنبيهات")
         layout = connection_page
         self.warning = QLabel(x.WARNING)
@@ -153,7 +150,6 @@ class XPanel(QScrollArea):
         history_layout.addWidget(self.overnight)
         history_card = Card("العملية المحددة وسجلها", "clock")
         history_layout.addWidget(history_card)
-        history_root = history_layout
         history_layout = history_card.body
         input_card = Card("الأسماء · توليد أو استيراد", "users")
         settings_card = Card("التوقيت والتخطي", "clock")
@@ -220,11 +216,6 @@ class XPanel(QScrollArea):
         self.job_settings = QLabel()
         self.job_settings.setWordWrap(True)
         history_layout.addWidget(self.job_settings)
-        self.restriction = QLabel()
-        self.restriction.setObjectName("simulation")
-        self.restriction.setTextFormat(Qt.TextFormat.PlainText)
-        self.restriction.setWordWrap(True)
-        history_layout.addWidget(self.restriction)
         self.start_button, self.preview_button, self.stop_button = self._actions(
             root_layout,
             (
@@ -249,21 +240,6 @@ class XPanel(QScrollArea):
                 ("إعادة فحص المحدد", self.recheck_selected),
             ),
         )
-        recovery_card = Card("القيود والاستعادة اليدوية", "info")
-        history_root.addWidget(recovery_card)
-        history_layout = recovery_card.body
-        history_layout.addWidget(self.restriction)
-        self.review_restriction_button = QPushButton("مراجعة دليل قيد X — دون اتصال")
-        self.review_restriction_button.clicked.connect(self.review_restriction)
-        history_layout.addWidget(self.review_restriction_button)
-        recovery_actions = self._actions(
-            history_layout,
-            (("طلب استعادة X واحد…", self.check_recovery), ("تحرير القيد يدويًا…", self.release_restriction)),
-        )
-        self.recovery_check_button, self.recovery_release_button = recovery_actions
-        self.recovery_label = QLabel()
-        self.recovery_label.setWordWrap(True)
-        history_layout.addWidget(self.recovery_label)
         self.status = QLabel()
         self.status.setWordWrap(True)
         history_layout.addWidget(self.status)
@@ -460,9 +436,6 @@ class XPanel(QScrollArea):
                 self.preview_button,
                 self.recheck_button,
                 self.selected_button,
-                self.recovery_check_button,
-                self.recovery_release_button,
-                self.review_restriction_button,
                 self.overnight.prepare_button,
             ):
                 widget.setEnabled(False)
@@ -517,40 +490,6 @@ class XPanel(QScrollArea):
             if run and run["state"].startswith("Preparation")
             else "استئناف العملية المحددة"
         )
-        self.restriction.setVisible(bool(blocked))
-        self.restriction.setText(self.restriction_text())
-        self.review_restriction_button.setEnabled(idle and bool(blocked))
-        recovery = self.recovery.status()
-        self.recovery_check_button.setEnabled(idle and recovery["eligible"])
-        self.recovery_release_button.setEnabled(idle and recovery["release_eligible"])
-        recovery_labels = {
-            "None": "لا قيد محفوظ.",
-            "Released": "حُرر القيد يدويًا؛ هذا لا يثبت استقرار الفحص المستمر.",
-            "Eligible": "يمكن طلب فحص استعادة واحد بعد التأكيد؛ نهاية القيد غير معروفة.",
-            "NewRestriction": "رُصد قيد جديد بعد التحرير؛ الفحص متوقف ويلزم تأكيد جديد لأي استعادة مسموحة.",
-            "Waiting": "الاستعادة والتحرير ممنوعان حتى انتهاء الانتظار المحفوظ: ",
-            "InFlight": "جارٍ طلب استعادة واحد؛ الفحص العادي ما زال ممنوعًا.",
-            "AwaitingRelease": "نجح طلب واحد؛ القيد ما زال قائمًا بانتظار إقرار التحرير اليدوي.",
-            "Failed": "فشل طلب الاستعادة؛ القيد باقٍ ولا إعادة تلقائية.",
-            "Cancelled": "أُلغي طلب الاستعادة؛ القيد باقٍ.",
-            "Uncertain": "طلب الاستعادة منقطع وغير محسوم؛ لا إعادة تلقائية.",
-            "ReviewRequired": "الدليل لا يسمح باستعادة 429 آمنة؛ يلزم فحص تقني.",
-        }
-        self.recovery_label.setText(
-            (
-                "نجح طلب واحد؛ "
-                if recovery["state"] == "Waiting"
-                and recovery["latest"]
-                and recovery["latest"]["state"] == "Succeeded"
-                else ""
-            )
-            + recovery_labels[recovery["state"]]
-            + (local_time(recovery["wait_until"]) if recovery["wait_until"] else "")
-        )
-        if recovery["state"] == "Waiting" and not self.recovery_timer.isActive():
-            self.recovery_timer.start()
-        elif recovery["state"] != "Waiting":
-            self.recovery_timer.stop()
         text = f"إعداد العمليات الجديدة: {self.speed.currentData():g} ثانية. "
         if run:
             text += f"العملية المحددة تحتفظ بفاصل {run['interval_seconds']:g} ثانية وباتصالها المحفوظ. "
@@ -563,71 +502,6 @@ class XPanel(QScrollArea):
                 else ""
             )
         )
-
-    def restriction_text(self):
-        info = self.repo.restriction_info()
-        if not info:
-            return ""
-        text = f"فحص X متوقف على مستوى المنصة للمراجعة: {info['reason']}. نهاية القيد غير معروفة. "
-        text += (
-            f"HTTP: {info['http_status'] or 'غير معروف'} • "
-            f"وقت القيد: {local_time(info['recorded_at']) if info['recorded_at'] else 'غير معروف'}. "
-        )
-        if info["minimum_retry_at"]:
-            text += "أدنى موعد انتظار معلن من الخادم: " + local_time(info["minimum_retry_at"]) + ". "
-        else:
-            text += "لم يُحفظ موعد انتظار صالح من الخادم؛ الموعد المحلي لا يثبت انتهاء القيد. "
-        if info["invalid_wait_headers"]:
-            text += "بعض رؤوس الانتظار غير صالحة. "
-        return text + "تغيير السرعة أو الاتصال ونجاح اختبار الشبكة لا يرفع المنع؛ المراجعة محلية دون طلبات."
-
-    def review_restriction(self):
-        info = self.repo.restriction_info()
-        if not info:
-            return
-        QMessageBox.information(
-            self,
-            "مراجعة قيد X — دون طلبات شبكة",
-            self.restriction_text()
-            + "\n\nالاستعادة تتطلب تأكيد طلب X واحد بالاتصال الأصلي، ثم إقرار تحرير منفصل عند نجاحه. "
-            "نجاح طلب واحد لا يضمن استقرار الفحص. لن تُستأنف العملية القديمة.\n\n"
-            + json.dumps(
-                dict(restriction=info, recovery_events=self.recovery.events()), ensure_ascii=False, indent=2
-            ),
-        )
-
-    def check_recovery(self):
-        if self.busy or self.closing or not self.recovery.status()["eligible"]:
-            return
-        info = self.repo.restriction_info()
-        if not self._confirm(
-            "إرسال طلب X واحد للاسم OpenAI عبر اتصال القيد الأصلي: "
-            + x_connection.label(info["connection"])
-            + "؟ لن يرفع القيد تلقائيًا، ونجاحه لا يضمن استقرار الطلبات اللاحقة."
-        ):
-            return
-        self._submit(
-            lambda: self.recovery.check(
-                confirmed=True, fetcher=self.fetcher, cancel=self.cancel, updated=self.progress_changed.emit
-            ),
-            lambda _: self.refresh(),
-        )
-
-    def release_restriction(self):
-        if self.busy or self.closing or not self.recovery.status()["release_eligible"]:
-            return
-        if not self._confirm(
-            "أقر بأن نجاح طلب واحد لا يثبت انتهاء القيود أو سلامة الفحص المستمر. "
-            "هل أحرر القيد لعملية جديدة بالاتصال الأصلي وبفاصل افتراضي 5 ثوانٍ؟ "
-            "لن تُستأنف العملية القديمة أو تتغير إعداداتها."
-        ):
-            return
-        try:
-            self.recovery.release(acknowledged=True)
-            self.speed.setCurrentIndex(self.speed.findData(self.repo.preferred_interval()))
-            self.refresh()
-        except ValueError as error:
-            self.status.setText(str(error))
 
     def spec(self):
         if self.modes.currentIndex() == 0:
@@ -788,6 +662,9 @@ class XPanel(QScrollArea):
         )
 
     def recheck_all(self):
+        if self.repo.control().get("blocked"):
+            self.refresh()
+            return
         if not self.connection_ready():
             return
         if self._confirm("إعادة فحص كل اسم X محفوظ مرة واحدة مع الحفاظ على تاريخه؟"):
@@ -804,6 +681,9 @@ class XPanel(QScrollArea):
         return self.rows[index] if 0 <= index < len(self.rows) else None
 
     def recheck_selected(self):
+        if self.repo.control().get("blocked"):
+            self.refresh()
+            return
         if not self.connection_ready():
             return
         row = self.selected()
@@ -943,10 +823,15 @@ class XPanel(QScrollArea):
                 f"فاصل العملية الفعلي: {run['interval_seconds']:g} ثانية • {run['error']}"
                 + " • اتصال العملية الفعلي: "
                 + x_connection.label(self.repo.connection_for_run(self.current_run))
+                + (
+                    " • سبب منع X: " + self.repo.control()["blocked"]
+                    if self.repo.control().get("blocked")
+                    else ""
+                )
             )
             self.activity_status.setText(
                 f"X • {state_label} • {run['completed']}/{run['total']}"
-                + (" • راجع صفحة العمليات والاستعادة" if self.repo.control().get("blocked") else "")
+                + (" • قيد محفوظ يمنع الفحص" if self.repo.control().get("blocked") else "")
             )
             source = SOURCES[run["input_source"]]
             summary = f"العملية المحفوظة {run['id'][:8]} • المصدر: {source} • "
@@ -972,8 +857,8 @@ class XPanel(QScrollArea):
                     "لا مرشحين مؤهلين؛ راجع عدّادات الإدخال غير الصالح والمكرر والمتجاوز."
                 )
         elif self.repo.control().get("blocked"):
-            self.status.setText("X متوقف للمراجعة: " + self.repo.control()["blocked"])
-            self.activity_status.setText("X متوقف بقيد محفوظ • راجع صفحة العمليات والاستعادة.")
+            self.status.setText("X متوقف: " + self.repo.control()["blocked"])
+            self.activity_status.setText("X متوقف بقيد محفوظ؛ لم يُرسل طلب جديد.")
         self.operations.blockSignals(False)
         self.controls()
         if self.stopping and self.busy:
@@ -1013,7 +898,6 @@ class XPanel(QScrollArea):
 
     def shutdown(self):
         self.result_query.shutdown()
-        self.recovery_timer.stop()
         self.closing = True
         self.refresh_timer.stop()
         self.stop(manual=False)

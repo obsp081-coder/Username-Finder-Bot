@@ -177,10 +177,10 @@ class DashboardPanel(QScrollArea):
         latest.body.addWidget(self.latest_fields)
         latest.body.addWidget(caption("ملخص محدود من الصفحات المحمّلة؛ ليس إحصاءً شاملًا للسجل.", "micro"))
         layout.addWidget(CardGrid((results_card, latest), columns=(2, 1), minimum=360))
-        self.restrictions = caption(
+        self.capability_notice = caption(
             "نتائج التحقق أولية ولا تضمن التسجيل. Bulk دليل حسابات مستقل عن إتاحة التسجيل.", "notice"
         )
-        layout.addWidget(self.restrictions)
+        layout.addWidget(self.capability_notice)
         layout.addStretch()
         self.setWidget(body)
         self.update_timer = QTimer(self)
@@ -281,10 +281,3 @@ class DashboardPanel(QScrollArea):
             self._last_results = data
         self.results_empty.setVisible(not data)
         self.results_table.setVisible(bool(data))
-        warnings = ["نتائج التحقق أولية ولا تضمن التسجيل. Bulk دليل حسابات؛ السجل المفقود لا يعني Available."]
-        for name, panel in zip(("Roblox", "X"), panels, strict=True):
-            if not panel.busy and not panel.start_button.isEnabled():
-                warnings.append(f"{name}: البدء غير متاح حاليًا؛ راجع العملية وقيودها.")
-        if not window.x_panel.restriction.isHidden():
-            warnings.append(window.x_panel.restriction.text())
-        self.restrictions.setText("\n".join(warnings))
