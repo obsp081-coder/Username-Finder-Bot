@@ -8,6 +8,7 @@ import json
 import math
 import os
 import sqlite3
+import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from urllib.parse import urlsplit
 from .roblox_local_selection import spreadsheet_row
 from .roblox_restriction import checking_permission
 from .roblox_storage import RobloxStore
+from .rovalid_filters import parse_filters
 from .vendor.rovalid.config import is_valid_username
 
 SOURCE = Path(__file__).parent / "vendor" / "rovalid"
@@ -136,16 +138,42 @@ def permission(database, *, lock_held=False):
         return dict(allowed=False, reason="تعذر تدقيق حالة Roblox القديمة؛ التشغيل ممنوع حتى المراجعة.")
 
 
-def secrets_payload(proxies, webhook, template):
-    entries = [p.strip() for p in proxies if p.strip()]
-    for entry in entries:
-        parsed = urlsplit(entry if "://" in entry else "http://" + entry)
+def proxy_entries(proxies):
+    entries, seen, duplicates = [], set(), 0
+    if not isinstance(proxies, list) or any(not isinstance(p, str) for p in proxies):
+        raise ValueError("Invalid proxy input")
+    for raw in proxies:
+        entry = raw.strip()
+        if not entry:
+            continue
+        if any(c.isspace() or ord(c) < 32 for c in entry):
+            raise ValueError("صيغة proxy غير صالحة؛ لم تُعرض بياناته.")
         try:
+            parsed = urlsplit(entry if "://" in entry else "http://" + entry)
             port = parsed.port
+            if (
+                parsed.scheme not in ("http", "https")
+                or not parsed.hostname
+                or not port
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError()
         except ValueError:
-            port = None
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or not port or parsed.path:
-            raise ValueError("صيغة proxy غير صالحة؛ استخدم host:port أو http://user:password@host:port.")
+            raise ValueError("صيغة proxy غير صالحة؛ لم تُعرض بياناته.") from None
+        # Credentials are case-sensitive: never merge distinct accounts on a common endpoint.
+        key = (parsed.scheme.lower(), parsed.hostname.lower(), port, parsed.username, parsed.password)
+        if key in seen:
+            duplicates += 1
+        else:
+            entries.append(entry)
+            seen.add(key)
+    return entries, dict(source_count=len(entries) + duplicates, duplicates=duplicates, accepted=len(entries))
+
+
+def secrets_payload(proxies, webhook, template):
+    entries, _ = proxy_entries(proxies)
     if webhook:
         parsed = urlsplit(webhook)
         if (
@@ -215,41 +243,77 @@ def histories(root):
     return sorted(rows, key=lambda row: row.get("created_at", ""), reverse=True)
 
 
-def saved_results(directory):
+def saved_results(directory, cancelled=lambda: False):
     """Read the engine's actual files; an incomplete hit is never an availability verdict."""
     for filename, label in (("hits.txt", "Available"), ("unresolved.txt", "Unknown")):
         path = Path(directory) / "results" / filename
         if not path.exists():
             continue
         with path.open(encoding="utf-8") as stream:
+            before = os.fstat(stream.fileno())
             for line in stream:
+                if cancelled():
+                    raise SearchCancelled("Local operation cancelled")
                 name = line.strip()
                 if name:
                     complete = filename != "hits.txt" or line.endswith("\n")
                     verdict = label if complete and is_valid_username(name) else "Unknown"
                     yield [name, verdict, "RoValid: " + filename]
+            after = os.fstat(stream.fileno())
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError("Source results changed during local reading; repeat the view explicitly")
 
 
-def result_rows(directory, *, query="", classification="", limit=500, offset=0):
+class SearchCancelled(Exception):
+    pass
+
+
+def matching_results(directory, predicate, cancelled=lambda: False):
+    for row in saved_results(directory, cancelled):
+        if cancelled():
+            raise SearchCancelled("Local operation cancelled")
+        if predicate.matches(row):
+            yield row
+
+
+def result_rows(
+    directory, *, query="", classification="", limit=500, offset=0, filters=None, cancelled=lambda: False
+):
     """Only hits and unresolved are canonical per-name evidence in this engine."""
     rows, count = [], 0
-    for row in saved_results(directory):
-        if (not classification or row[1] == classification) and query.casefold() in row[0].casefold():
-            if count >= offset and (limit is None or len(rows) < limit):
-                rows.append(row)
-            count += 1
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 500:
+        raise ValueError("Invalid result page")
+    predicate = parse_filters(filters, query=query, classification=classification)
+    for row in matching_results(directory, predicate, cancelled):
+        if count >= offset and len(rows) < limit:
+            rows.append(row)
+        count += 1
     return rows, count
 
 
-def export_results(directory, destination, *, query="", classification=""):
+def export_results(
+    directory, destination, *, query="", classification="", filters=None, cancelled=lambda: False
+):
     # Export from persisted evidence, never from terminal text or an in-flight feed.
     target = Path(destination).resolve()
     if target.is_relative_to(Path(directory).resolve()) or target.suffix.lower() != ".csv":
         raise ValueError("Export must be a CSV outside the source run directory")
+    predicate = parse_filters(filters, query=query, classification=classification)
     fields = ["username", "classification", "source"]
-    with target.open("w", encoding="utf-8-sig", newline="") as stream:
-        writer = csv.writer(stream)
-        writer.writerow([*fields, "json_encoded_fields"])
-        for row in saved_results(directory):
-            if (not classification or row[1] == classification) and query.casefold() in row[0].casefold():
+    fd, staging = tempfile.mkstemp(prefix=".rovalid-export-", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8-sig", newline="") as stream:
+            writer = csv.writer(stream)
+            writer.writerow([*fields, "json_encoded_fields"])
+            count = 0
+            for row in matching_results(directory, predicate, cancelled):
                 writer.writerow(spreadsheet_row(row, fields))
+                count += 1
+            stream.flush()
+            os.fsync(stream.fileno())
+        if cancelled():
+            raise SearchCancelled("Export cancelled before publish")
+        Path(staging).replace(target)
+        return count
+    finally:
+        Path(staging).unlink(missing_ok=True)

@@ -30,6 +30,8 @@ from PySide6.QtWidgets import (
 
 from . import rovalid
 from .roblox_storage import RobloxStore
+from .rovalid_filters_ui import ResultFilterPanel
+from .rovalid_proxy_ui import PrivateProxyEdit
 from .ui_cards import Card, PageHeading, caption
 
 
@@ -45,6 +47,8 @@ class RoValidPanel(QWidget):
         self.current_run, self.record = None, {}
         self.closing = self.stopping = False
         self.view_progress = (None, None)
+        self.result_offset, self.result_total = 0, 0
+        self.proxy_pool = []
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(Path(__file__).resolve().parent.parent))
         self.process.readyReadStandardOutput.connect(self._read_output)
@@ -100,21 +104,32 @@ class RoValidPanel(QWidget):
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         connection.body.addLayout(form)
         self.proxy_mode = QComboBox()
-        self.proxy_mode.addItem("مباشر — دون proxies", False)
-        self.proxy_mode.addItem("قائمة proxies خاصة يحددها المستخدم", True)
+        self.proxy_mode.addItem("مباشر — دون proxies", "direct")
+        self.proxy_mode.addItem("استيراد proxies من TXT", "file")
+        self.proxy_mode.addItem("لصق / إدخال proxies", "manual")
+        self.proxy_mode.addItem("جلب مصادر RoValid وفحص الاتصال", "sources")
         form.addRow("الاتصال", self.proxy_mode)
         self.proxy_path = QLineEdit()
         self.proxy_path.setReadOnly(True)
-        picker = QPushButton("استيراد ملف proxies…")
-        picker.clicked.connect(self.choose_proxies)
-        form.addRow(picker, self.proxy_path)
-        self.proxy_entries = QLineEdit()
-        self.proxy_entries.setEchoMode(QLineEdit.EchoMode.Password)
-        self.proxy_entries.setPlaceholderText("host:port؛ افصل الإدخالات بعلامة ;")
-        self.proxy_entries.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        form.addRow("لصق proxies (مخفي)", self.proxy_entries)
+        self.proxy_picker = QPushButton("استيراد ملف proxies…")
+        self.proxy_picker.clicked.connect(self.choose_proxies)
+        form.addRow(self.proxy_picker, self.proxy_path)
+        self.proxy_entries = PrivateProxyEdit()
+        form.addRow(self.proxy_entries)
+        self.proxy_reveal = QCheckBox("إظهار الإدخالات مؤقتًا — قد تحتوي بيانات اعتماد")
+        self.proxy_reveal.toggled.connect(self.proxy_entries.reveal)
+        form.addRow(self.proxy_reveal)
+        self.proxy_validate = QPushButton("تحقق محلي من الصيغة والتكرار — دون شبكة")
+        self.proxy_validate.clicked.connect(self.validate_proxy_input)
+        form.addRow(self.proxy_validate)
+        self.proxy_fetch = QPushButton("جلب وفحص المصادر بطلب صريح")
+        self.proxy_fetch.clicked.connect(self.fetch_proxies)
+        form.addRow(self.proxy_fetch)
+        self.proxy_notice = caption("")
+        form.addRow(self.proxy_notice)
         self.remove_bad = QCheckBox("إزالة proxies الفاشلة من تجمع الجلسة وفق المحرك")
         form.addRow(self.remove_bad)
+        self.proxy_mode.currentIndexChanged.connect(self.proxy_controls)
         self.webhook = QLineEdit()
         self.webhook.setEchoMode(QLineEdit.EchoMode.Password)
         self.webhook.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -215,22 +230,23 @@ class RoValidPanel(QWidget):
         result_layout.addWidget(
             caption(
                 "يُحفظ تفصيليًا Available (أولي) وUnknown فقط. Taken وCensored وInvalid عدادات إجمالية؛ "
-                "لا نختلق سجلات فردية أو نساوي Censored بملكية حساب. أول 500 نتيجة مطابقة معروضة."
+                "لا نختلق سجلات فردية أو نساوي Censored بملكية حساب. كل المرشحات تُجمع بشرط AND."
             )
         )
+        self.result_filters = ResultFilterPanel()
+        self.search, self.filter = self.result_filters.search, self.result_filters.classification
+        self.result_filters.apply.clicked.connect(self.refresh_results)
+        self.result_filters.reset.clicked.connect(self.refresh_results)
+        self.search.returnPressed.connect(self.refresh_results)
+        result_layout.addWidget(self.result_filters)
         filters = QHBoxLayout()
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("البحث في النتائج المحفوظة")
-        self.search.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
-        self.filter = QComboBox()
-        self.filter.addItem("الكل", "")
-        for key, label in rovalid.LABELS.items():
-            self.filter.addItem(label, key)
-        refresh = QPushButton("عرض النتائج")
-        refresh.clicked.connect(self.refresh_results)
         export = QPushButton("تصدير CSV…")
         export.clicked.connect(self.export)
-        for control in (self.search, self.filter, refresh, export):
+        self.previous_results = QPushButton("السابق")
+        self.next_results = QPushButton("التالي")
+        self.previous_results.clicked.connect(lambda: self.result_page(-1))
+        self.next_results.clicked.connect(lambda: self.result_page(1))
+        for control in (self.previous_results, self.next_results, export):
             filters.addWidget(control)
         result_layout.addLayout(filters)
         self.result_table = make_table(["الاسم", "التصنيف الأولي", "ملف المصدر"])
@@ -266,6 +282,7 @@ class RoValidPanel(QWidget):
             self.activity_status.setText("إعدادات RoValid غير سليمة؛ عُرضت الافتراضيات دون الكتابة فوق الملف.")
         self.refresh_history()
         self.controls()
+        self.proxy_controls()
 
     @property
     def busy(self):
@@ -329,11 +346,15 @@ class RoValidPanel(QWidget):
         active = self.busy or self.closing
         self.settings_page.setEnabled(not active)
         self.history.setEnabled(not active)
+        self.result_filters.setEnabled(not active)
+        self.previous_results.setEnabled(not active and self.result_offset > 0)
+        self.next_results.setEnabled(not active and self.result_offset + 500 < self.result_total)
         self.prepare_button.setEnabled(not active)
         permission = rovalid.permission(self.store.path) if not active else dict(allowed=False, reason="")
         self.checking_allowed = permission["allowed"]
         self.restriction.setText(permission["reason"] or "عملية محلية جارية؛ لا بدء ثانٍ.")
         allowed = permission["allowed"] and not active
+        self.proxy_fetch.setEnabled(allowed and self.proxy_mode.currentData() == "sources")
         self.start_button.setEnabled(allowed and self.record.get("state") == "Prepared")
         self.resume_button.setEnabled(allowed and self.record.get("state") in ("Stopped", "Completed"))
         self.stop_button.setEnabled(self.busy and not self.stopping)
@@ -353,16 +374,72 @@ class RoValidPanel(QWidget):
 
     def secret_options(self):
         proxies = []
-        if self.proxy_mode.currentData():
+        mode = self.proxy_mode.currentData()
+        if mode == "file":
             if self.proxy_path.text():
                 path = Path(self.proxy_path.text())
                 if path.stat().st_size > 1024 * 1024:
                     raise ValueError("ملف proxies أكبر من حد الواجهة 1 MiB.")
                 proxies.extend(path.read_text(encoding="utf-8-sig").splitlines())
-            proxies.extend(self.proxy_entries.text().replace(";", "\n").splitlines())
-            if not any(value.strip() for value in proxies):
-                raise ValueError("اختر ملف proxies أو أدخل قائمة، أو اختر الاتصال المباشر.")
-        return rovalid.secrets_payload(proxies, self.webhook.text().strip(), self.template.text())
+        elif mode == "manual":
+            proxies = self.proxy_entries.toPlainText().replace(";", "\n").splitlines()
+        elif mode == "sources":
+            proxies = self.proxy_pool
+        if mode != "direct" and not any(value.strip() for value in proxies):
+            raise ValueError("لا توجد proxies لهذا المصدر؛ أدخل قائمة أو اختر الاتصال المباشر.")
+        entries, counts = rovalid.proxy_entries(proxies)
+        self.proxy_notice.setText(
+            f"مدخلات: {counts['source_count']} • مكرر: {counts['duplicates']} • "
+            f"مقبول صياغيًا: {counts['accepted']}؛ لم يُفحص الاتصال أو Roblox."
+        )
+        return rovalid.secrets_payload(entries, self.webhook.text().strip(), self.template.text()) | dict(
+            scraped=mode == "sources"
+        )
+
+    def proxy_controls(self):
+        mode = self.proxy_mode.currentData()
+        self.proxy_path.setVisible(mode == "file")
+        self.proxy_picker.setVisible(mode == "file")
+        self.proxy_entries.setVisible(mode == "manual")
+        self.proxy_reveal.setVisible(mode == "manual")
+        if mode != "manual":
+            self.proxy_reveal.setChecked(False)
+        self.proxy_validate.setVisible(mode in ("file", "manual"))
+        self.remove_bad.setVisible(mode != "direct")
+        self.proxy_fetch.setVisible(mode == "sources")
+        status = rovalid.permission(self.store.path) if mode == "sources" else None
+        self.proxy_fetch.setEnabled(bool(status and status["allowed"]) and not self.busy)
+        if mode == "sources":
+            self.proxy_notice.setText(
+                "الفحص الأصلي يتصل بـRoblox ويقبل 200 أو429 كدليل وصول فقط، وليس تحقق إتاحة.\n"
+                + (status["reason"] if not status["allowed"] else "يلزم إجراء صريح؛ لا جلب تلقائي.")
+            )
+        else:
+            self.proxy_notice.setText("لا إرسال تلقائي؛ فحص الصيغة لا يثبت اتصالًا أو صحة نتائج Roblox.")
+
+    def validate_proxy_input(self):
+        try:
+            self.secret_options()
+        except (ValueError, OSError, UnicodeError):
+            self.proxy_notice.setText("تعذر قبول الملف أو الإدخال؛ راجع الصيغة. لم تُعرض أسرار ولم يُرسل طلب.")
+
+    def fetch_proxies(self):
+        if self.busy or self.closing:
+            return
+        status = rovalid.permission(self.store.path)
+        if not status["allowed"]:
+            self.proxy_notice.setText(status["reason"])
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "تأكيد جلب وفحص proxies",
+                "سيجلب المصدر قوائم عامة ويفحص الوصول إلى Roblox؛ ليس إثباتًا لصحة الفحص.",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        self.launch("proxy_sources", {})
 
     def start(self):
         self._start(False)
@@ -414,7 +491,7 @@ class RoValidPanel(QWidget):
                 "username_finder.rovalid_child",
                 action,
                 str(self.root.resolve()),
-                self.current_run,
+                self.current_run or uuid4().hex,
                 str(self.store.path.resolve()),
             ]
         )
@@ -443,9 +520,24 @@ class RoValidPanel(QWidget):
                     self.fill_table(
                         self.result_table, [[r[0], rovalid.LABELS[r[1]], r[2]] for r in event["rows"]]
                     )
-                    self.result_count.setText(f"معروض: {len(event['rows'])} / مطابق: {event['total']}")
+                    self.result_total = event["total"]
+                    self.result_offset = event.get("offset", 0)
+                    begin = self.result_offset + 1 if event["rows"] else 0
+                    end = self.result_offset + len(event["rows"]) if event["rows"] else 0
+                    self.result_count.setText(f"{begin:,}–{end:,} من {self.result_total:,} مطابق")
+                    self.outcome = kind
+                elif kind == "proxy_pool":
+                    self.proxy_pool = event["proxies"]
+                    self.proxy_notice.setText(
+                        f"مصدر: {event['source_count']} • مكرر: {event['duplicates']} • "
+                        f"فُحص: {event['screened']} • مقبول وصولًا: {event['accepted']} • "
+                        f"فشل وصول: {event['failures']}؛ ليس تحقق أسماء Roblox."
+                    )
                     self.outcome = kind
                 elif kind == "exported":
+                    self.outcome = kind
+                    self.export_count = event.get("count", 0)
+                elif kind == "cancelled":
                     self.outcome = kind
                 elif kind == "error":
                     self.outcome = "error"
@@ -500,6 +592,11 @@ class RoValidPanel(QWidget):
             self.activity_status.setText(
                 "فشل أو إنهاء غير متوقع؛ راجع الأدلة. لا استئناف تلقائي أو نجاح مفترض. " + detail
             )
+        elif self.outcome == "cancelled":
+            self.activity_status.setText("أُلغيت العملية المحلية؛ لم يُنشر تصدير جزئي.")
+            if self.action == "view":
+                self.result_offset, self.result_total = 0, 0
+                self.result_count.setText("أُلغي البحث؛ أعد تطبيق المرشحات لعرض النتائج.")
         else:
             self.activity_status.setText(
                 "اكتملت المعاينة المحلية."
@@ -507,6 +604,8 @@ class RoValidPanel(QWidget):
                 else f"حالة العملية: {self.record.get('state', '')} • "
                 f"السبب: {self.record.get('reason', 'local_view')}"
             )
+            if self.action == "export":
+                self.activity_status.setText(f"حُفظ التصدير كاملًا: {self.export_count:,} سجل مطابق.")
         self.stopping = False
         self.refresh_history()
         self.show_saved_statistics()
@@ -516,7 +615,7 @@ class RoValidPanel(QWidget):
     def stop(self):
         if self.busy and not self.stopping:
             self.stopping = True
-            if self.action == "run":
+            if self.action in ("run", "view", "export"):
                 self.process.write(b"stop\n")
             self.activity_status.setText("جارٍ الإيقاف التعاوني والحفظ؛ لا إغلاق قسري.")
             self.stop_button.setEnabled(False)
@@ -547,6 +646,8 @@ class RoValidPanel(QWidget):
         if not self.busy and 0 <= index < len(self.history_rows):
             self.record = self.history_rows[index]
             self.current_run = self.record["id"]
+            self.result_offset, self.result_total = 0, 0
+            self.fill_table(self.result_table, [])
             self.apply_options(rovalid.settings(self.record["settings"]))
             self.activity_status.setText(f"{self.record['state']} • {self.record.get('reason', '')}")
             self.show_saved_statistics()
@@ -583,9 +684,18 @@ class RoValidPanel(QWidget):
             self.statistics.setText("إحصاءات غير سليمة؛ يلزم تدقيق السجل الأصلي. لا تشغيل.")
             self.view_progress = (self.current_run, None)
 
-    def refresh_results(self):
+    def refresh_results(self, _=False, *, offset=0):
         if self.current_run and not self.busy and not self.closing:
-            self.launch("view", dict(query=self.search.text(), classification=self.filter.currentData()))
+            values = self.result_filters.values()
+            if values != getattr(self, "applied_filters", None):
+                offset = 0
+            self.applied_filters = values
+            self.fill_table(self.result_table, [])
+            self.result_count.setText("جارٍ البحث في كامل السجل…")
+            self.launch("view", dict(filters=values, offset=offset))
+
+    def result_page(self, direction):
+        self.refresh_results(offset=max(0, self.result_offset + direction * 500))
 
     def export(self):
         if not self.current_run or self.busy or self.closing:
@@ -598,7 +708,6 @@ class RoValidPanel(QWidget):
                 "export",
                 dict(
                     destination=destination,
-                    query=self.search.text(),
-                    classification=self.filter.currentData(),
+                    filters=self.result_filters.values(),
                 ),
             )

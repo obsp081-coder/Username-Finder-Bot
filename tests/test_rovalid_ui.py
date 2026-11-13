@@ -164,10 +164,12 @@ def test_durable_results_async_view_and_safe_export(desktop, qtbot, tmp_path, mo
     wait_idle(qtbot, panel)
     assert panel.result_table.rowCount() == 2
     assert panel.result_table.item(0, 1).text() == "متاح أوليًا"
-    panel.filter.setCurrentIndex(panel.filter.findData("Taken"))
+    assert panel.filter.findData("Taken") == -1
+    panel.search.setText("missing")
     panel.refresh_results()
     wait_idle(qtbot, panel)
     assert panel.result_table.rowCount() == 0
+    panel.search.clear()
     destination = tmp_path / "safe.csv"
     monkeypatch.setattr(
         "username_finder.rovalid_ui.QFileDialog.getSaveFileName", lambda *a: (str(destination), "")
@@ -258,7 +260,7 @@ def test_offscreen_layout_accessible(desktop, qtbot, width, height):
     panel.workspace.setCurrentIndex(0)
     assert panel.settings_page.verticalScrollBar().maximum() > 0
     assert panel.webhook.echoMode() == panel.webhook.EchoMode.Password
-    assert panel.proxy_entries.echoMode() == panel.proxy_entries.EchoMode.Password
+    assert not panel.proxy_entries.revealed
 
 
 def test_stop_shutdown_and_failed_start_without_killing_process(desktop, monkeypatch):

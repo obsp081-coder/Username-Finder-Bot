@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import sys
 import threading
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from . import rovalid
@@ -79,6 +81,7 @@ def configure(record, names, secrets, config):
         concurrency=options["concurrency"],
         timeout=options["timeout"],
         two_stage=options["mode"] == "two_stage",
+        scraped=secrets.get("scraped", False) is True,
         webhook_url=secret["webhook"],
         webhook_message=secret["template"],
         repeat_until_found=options["repeat"],
@@ -95,6 +98,47 @@ def configure(record, names, secrets, config):
         proxyless_min_gap=options["gap"],
     )
     return cfg, app
+
+
+def fetch_pool(database, wizard):
+    """Explicit source action; the original prescreen contacts Roblox, including under 429."""
+    from proxy import prescreen
+    from rich.console import Console
+
+    if not rovalid.permission(database)["allowed"]:
+        raise ValueError("Proxy screening unavailable under historical Roblox restrictions")
+    with RobloxActivity(database):
+        if not rovalid.permission(database, lock_held=True)["allowed"]:
+            raise ValueError("Roblox screening restricted")
+        original = wizard.console
+        wizard.console = Console(file=io.StringIO())
+        try:
+
+            async def fetch():
+                pool = await wizard._scrape_proxies()
+                entries, counts = rovalid.proxy_entries(pool)
+                # The public source path must never publish authenticated entries in protocol events.
+                if any("@" in entry for entry in entries):
+                    raise ValueError("Unexpected authenticated public-source proxy")
+                live = await prescreen(entries)
+                live, _ = rovalid.proxy_entries(live)
+                if any("@" in entry for entry in live) or len(live) > len(entries):
+                    raise ValueError("Unexpected public-source screening output")
+                return dict(
+                    proxies=live,
+                    scraped=True,
+                    source_count=counts["source_count"],
+                    duplicates=counts["duplicates"],
+                    screened=len(entries),
+                    accepted=len(live),
+                    failures=len(entries) - len(live),
+                )
+
+            # Preserve source behavior while suppressing terminal strings, which are not evidence.
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                return asyncio.run(fetch())
+        finally:
+            wizard.console = original
 
 
 def run_engine(directory, database, packet, checker, config):
@@ -217,29 +261,53 @@ def main():
         action, root, identity, database = sys.argv[1:]
         packet = json.loads(sys.stdin.readline())
         directory = rovalid.run_directory(root, identity)
+        if action in ("view", "export"):
+            cancelled = threading.Event()
+
+            def local_commands():
+                for line in sys.stdin:
+                    if line.strip() == "stop":
+                        break
+                cancelled.set()
+
+            threading.Thread(target=local_commands, daemon=True).start()
         if action == "view":
             rows, total = rovalid.result_rows(
-                directory, query=packet["query"], classification=packet["classification"]
+                directory,
+                query=packet.get("query", ""),
+                classification=packet.get("classification", ""),
+                filters=packet.get("filters"),
+                offset=packet.get("offset", 0),
+                cancelled=cancelled.is_set,
             )
-            emit("view", rows=rows, total=total)
+            emit("view", rows=rows, total=total, offset=packet.get("offset", 0))
             return 0
         if action == "export":
-            rovalid.export_results(
+            if Path(packet["destination"]).resolve().is_relative_to(Path(root).resolve()):
+                raise ValueError("Export cannot target any engine runtime or recovery directory")
+            count = rovalid.export_results(
                 directory,
                 packet["destination"],
-                query=packet["query"],
-                classification=packet["classification"],
+                query=packet.get("query", ""),
+                classification=packet.get("classification", ""),
+                filters=packet.get("filters"),
+                cancelled=cancelled.is_set,
             )
-            emit("exported")
+            emit("exported", count=count)
             return 0
         checker, config, wizard = engine_modules()
-        if action == "prepare":
+        if action == "proxy_sources":
+            emit("proxy_pool", **fetch_pool(database, wizard))
+        elif action == "prepare":
             directory.mkdir(parents=True, exist_ok=False)
             emit("prepared", data=prepare(directory, packet, config, wizard))
         elif action == "run":
             run_engine(directory, database, packet, checker, config)
         else:
             raise ValueError("Unsupported action")
+        return 0
+    except rovalid.SearchCancelled:
+        emit("cancelled")
         return 0
     except BaseException as exc:
         # Exception strings/tracebacks can include authenticated proxy URLs; never forward them.
