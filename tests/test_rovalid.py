@@ -84,9 +84,12 @@ def test_source_hashes_and_required_files():
 
 
 @pytest.mark.parametrize("mode", ["two_stage", "validator"])
-def test_new_429_invalidates_review_and_requests_managed_stop(tmp_path, database, engine, monkeypatch, mode):
+@pytest.mark.parametrize("monitoring", [True, False])
+def test_new_429_invalidates_review_and_requests_managed_stop(
+    tmp_path, database, engine, monkeypatch, mode, monitoring
+):
     checker, config, _ = engine
-    directory, _ = prepared(tmp_path, engine, options=dict(mode=mode))
+    directory, _ = prepared(tmp_path, engine, options=dict(mode=mode, integration_monitoring=monitoring))
 
     async def restricted(*args):
         stop = checker._StopRequest()
@@ -96,8 +99,11 @@ def test_new_429_invalidates_review_and_requests_managed_stop(tmp_path, database
     monkeypatch.setattr(checker, "_run_rounds_owned", restricted)
     monkeypatch.setattr(checker.aiohttp, "ClientSession", lambda **kw: pytest.fail("No dispatch"))
     monkeypatch.setattr(sys, "stdin", Commands())
-    monkeypatch.setattr(rovalid_child, "emit", lambda *a, **kw: None)
+    events = []
+    monkeypatch.setattr(rovalid_child, "emit", lambda event, **kw: events.append(event))
     rovalid_child.run_engine(directory, database, {}, checker, config)
+    assert "restriction" in events
+    assert ("progress" in events) == monitoring
     assert RobloxActivity(database).block.read_bytes() == b"rovalid_review_required"
     assert rovalid.read_json(directory / "run.json")["state"] == "Stopped"
     for other in rovalid_review.MODES:
@@ -289,11 +295,14 @@ def transport(monkeypatch, checker, *, callback=None):
 
 
 @pytest.mark.parametrize("mode", ["two_stage", "validator"])
+@pytest.mark.parametrize("monitoring", [True, False])
 def test_real_engine_modes_structured_counts_and_durable_results(
-    tmp_path, database, engine, monkeypatch, mode
+    tmp_path, database, engine, monkeypatch, mode, monitoring
 ):
     checker, config, _ = engine
-    directory, _ = prepared(tmp_path, engine, options=dict(mode=mode, concurrency=1))
+    directory, _ = prepared(
+        tmp_path, engine, options=dict(mode=mode, concurrency=1, integration_monitoring=monitoring)
+    )
     calls = transport(monkeypatch, checker)
     commands = Commands()
     monkeypatch.setattr(sys, "stdin", commands)
@@ -320,18 +329,24 @@ def test_real_engine_modes_structured_counts_and_durable_results(
     assert database.read_bytes() == before
     assert RobloxActivity(database).pending.read_bytes().endswith(b"Clear\n")
     assert not any("private" in json.dumps(event) for event in events)
-    final_progress = [event[1]["data"] for event in events if event[0] == "progress"][-1]
+    progress_events = [event[1]["data"] for event in events if event[0] == "progress"]
+    assert bool(progress_events) == monitoring
+    final_progress = saved["progress"]
     assert final_progress["resolved"] == 4 and final_progress["requests"] == 5
     assert final_progress["rps"] == pytest.approx(5 / final_progress["elapsed"])
     assert final_progress["checks_rps"] == pytest.approx(4 / final_progress["elapsed"])
 
 
+@pytest.mark.parametrize("monitoring", [True, False])
 def test_stop_save_and_explicit_unresolved_recovery_no_completed_replay(
-    tmp_path, database, engine, monkeypatch
+    tmp_path, database, engine, monkeypatch, monitoring
 ):
     checker, config, _ = engine
     directory, _ = prepared(
-        tmp_path, engine, options=dict(mode="validator", concurrency=1), text="TakenName\nFreeName\n"
+        tmp_path,
+        engine,
+        options=dict(mode="validator", concurrency=1, integration_monitoring=monitoring),
+        text="TakenName\nFreeName\n",
     )
     commands = Commands()
 
@@ -373,11 +388,12 @@ def test_stop_save_and_explicit_unresolved_recovery_no_completed_replay(
 
 
 @pytest.mark.parametrize("marker", ["block", "pending", "cooldown", "control"])
+@pytest.mark.parametrize("monitoring", [True, False])
 def test_legacy_guards_block_without_network_or_evidence_mutation(
-    tmp_path, database, engine, monkeypatch, marker
+    tmp_path, database, engine, monkeypatch, marker, monitoring
 ):
     checker, config, _ = engine
-    directory, _ = prepared(tmp_path, engine)
+    directory, _ = prepared(tmp_path, engine, options=dict(integration_monitoring=monitoring))
     guard = RobloxActivity(database)
     if marker == "block":
         guard.block.write_bytes(b"http_429")

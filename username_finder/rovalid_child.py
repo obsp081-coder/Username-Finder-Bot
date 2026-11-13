@@ -157,7 +157,8 @@ def run_engine(directory, database, packet, checker, config):
     ):
         raise ValueError("Unsafe recovery state; manual review required")
     # Read only the original database. No Store constructor, migration, recover(), or legacy job dispatch.
-    mode = rovalid.settings(record["settings"])["mode"]
+    options = rovalid.settings(record["settings"])
+    mode = options["mode"]
     connection = (
         "sources" if packet.get("scraped") is True else "private" if packet.get("proxies") else "direct"
     )
@@ -203,9 +204,12 @@ def run_engine(directory, database, packet, checker, config):
                 stop_requested.set()
                 for stop in stop_objects:
                     stop.requested, stop.reason = True, "provider_restriction_review"
+                emit("restriction")
             record["progress"] = dict(latest)
             rovalid.atomic_json(directory / "run.json", record)
-            emit("progress", data=latest)
+            # Optional presentation only: safety detection and durable progress above never switch off.
+            if options["integration_monitoring"]:
+                emit("progress", data=latest)
             return Text("")
 
         def final(**values):

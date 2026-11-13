@@ -34,6 +34,7 @@ DEFAULTS = dict(
     timeout=15,
     gap=0.0,
     diagnostics=False,
+    integration_monitoring=True,
     stop_on_429=False,
     threshold=5,
     window=60.0,
@@ -75,7 +76,14 @@ def settings(value):
     if not isinstance(value, dict) or set(value) - set(DEFAULTS):
         raise ValueError("Unsupported RoValid settings")
     data = DEFAULTS | value
-    for field in ("underscore", "repeat", "diagnostics", "stop_on_429", "remove_bad"):
+    for field in (
+        "underscore",
+        "repeat",
+        "diagnostics",
+        "integration_monitoring",
+        "stop_on_429",
+        "remove_bad",
+    ):
         if type(data[field]) is not bool:
             raise ValueError("Invalid Boolean setting")
     for field, low, high in (
