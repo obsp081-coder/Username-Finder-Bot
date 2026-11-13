@@ -170,14 +170,6 @@ class RoValidPanel(QWidget):
         self.diagnostics = QCheckBox("حفظ تشخيص المحرك المحلي")
         self.stop_on_429 = QCheckBox("إيقاف عند بلوغ حد 429 خلال النافذة")
         form.addRow(self.diagnostics)
-        self.integration_monitoring = QCheckBox("المراقبة الإضافية للتطبيق")
-        form.addRow(self.integration_monitoring)
-        form.addRow(
-            caption(
-                "تحدّث التقدم والعدادات والسرعة لحظيًا فقط؛ لا تغيّر RoValid أو تتجاوز قيود Roblox. "
-                "عند الإيقاف تبقى الأدلة والإحصاءات النهائية محفوظة."
-            )
-        )
         form.addRow(self.stop_on_429)
         self.threshold = QSpinBox()
         self.threshold.setRange(1, 10000)
@@ -298,7 +290,6 @@ class RoValidPanel(QWidget):
         self.refresh_history()
         self.controls()
         self.proxy_controls()
-        self.integration_monitoring.toggled.connect(self.save_monitoring_preference)
 
     @property
     def busy(self):
@@ -317,7 +308,6 @@ class RoValidPanel(QWidget):
                 timeout=self.timeout.value(),
                 gap=self.gap.value(),
                 diagnostics=self.diagnostics.isChecked(),
-                integration_monitoring=self.integration_monitoring.isChecked(),
                 stop_on_429=self.stop_on_429.isChecked(),
                 threshold=self.threshold.value(),
                 window=self.window_seconds.value(),
@@ -345,24 +335,6 @@ class RoValidPanel(QWidget):
             (self.remove_bad, "remove_bad"),
         ):
             control.setChecked(options[key])
-        blocked = self.integration_monitoring.blockSignals(True)
-        self.integration_monitoring.setChecked(options.get("integration_monitoring", True))
-        self.integration_monitoring.blockSignals(blocked)
-
-    def save_monitoring_preference(self, enabled):
-        if self.busy or self.closing:
-            return
-        path = self.root / "settings.json"
-        try:
-            saved = rovalid.settings(rovalid.read_json(path) if path.exists() else {})
-            rovalid.atomic_json(path, saved | dict(integration_monitoring=enabled))
-            self.activity_status.setText(
-                "حُفظت المراقبة الإضافية: "
-                + ("مفعلة" if enabled else "متوقفة")
-                + ". تطبق عند تحضير عملية جديدة؛ العملية المحفوظة تستعمل إعدادها الأصلي."
-            )
-        except (ValueError, OSError):
-            self.activity_status.setText("تعذر حفظ تفضيل المراقبة؛ لم تُستبدل الإعدادات غير السليمة.")
 
     def choose_input(self):
         path, _ = QFileDialog.getOpenFileName(self, "اختيار أسماء RoValid", "", "Text (*.txt);;All files (*)")
@@ -544,7 +516,8 @@ class RoValidPanel(QWidget):
         if self.record.get("state") not in (("Stopped", "Completed") if resume else ("Prepared",)):
             return
         try:
-            if not resume and self.options() != rovalid.settings(self.record["settings"]):
+            saved_options = rovalid.settings(self.record["settings"]) | dict(integration_monitoring=True)
+            if not resume and self.options() != saved_options:
                 raise ValueError("تغيرت الإعدادات؛ أعد المعاينة والحفظ أولًا.")
             packet = self.secret_options() | dict(resume=resume)
             message = (
@@ -586,12 +559,9 @@ class RoValidPanel(QWidget):
         self.process.write((json.dumps(packet, ensure_ascii=True) + "\n").encode("utf-8"))
         self.activity_status.setText("جارٍ التحضير المحلي…" if action == "prepare" else "جارٍ تنفيذ العملية…")
         if action == "run":
-            monitored = rovalid.settings(self.record["settings"])["integration_monitoring"]
             self.view_progress = (self.current_run, None)
             self.statistics.setText(
-                "المراقبة الحية الإضافية "
-                + ("مفعلة" if monitored else "متوقفة")
-                + " لهذه العملية المحفوظة؛ الحماية وحفظ الأدلة مستمران."
+                "العرض الحي للتقدم والسرعة مفعّل؛ معالجة 429 والتبريد بإعدادات RoValid الأصلية."
             )
             self.progress.setValue(0)
             self.progress.setFormat("…")
@@ -608,7 +578,7 @@ class RoValidPanel(QWidget):
                     self.show_progress(event["data"])
                 elif kind == "restriction":
                     self.activity_status.setText(
-                        "رُصد قيد جديد؛ جارٍ الإيقاف الوقائي وحفظ الأدلة، دون تحرير القيود."
+                        "اختار RoValid التوقف بسبب تقييد مستمر؛ حُفظ دليل المراجعة دون تحرير القيود."
                     )
                 elif kind in ("prepared", "finished"):
                     self.record, self.outcome = event["data"], kind

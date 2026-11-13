@@ -22,6 +22,7 @@ def desktop(qtbot, tmp_path, monkeypatch):
         snapshot = rovalid_review.inspect(database)
         return records + [
             dict(
+                policy=rovalid_review.POLICY,
                 scope=rovalid_review.scope(mode, connection),
                 decision="authorize",
                 fingerprint=snapshot["fingerprint"],

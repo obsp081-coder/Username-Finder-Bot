@@ -154,3 +154,22 @@ def test_review_is_durable_and_scoped_to_database_identity(db, tmp_path):
     review.journal_path(other.path).write_bytes(review.journal_path(db).read_bytes())
     assert not rovalid.permission(other.path, mode="validator")["allowed"]
     other.close()
+
+
+def test_v1_review_history_is_preserved_but_native_policy_needs_explicit_review(db):
+    row = decide(db)
+    row["policy"] = review.LEGACY_POLICY
+    row["snapshot"]["policy"] = review.LEGACY_POLICY
+    row["fingerprint"] = review.digest(row["snapshot"])
+    row["hash"] = review.digest({k: v for k, v in row.items() if k != "hash"})
+    path = review.journal_path(db)
+    path.write_text(json.dumps(row) + "\n", encoding="utf8")
+    original = path.read_bytes()
+    status = rovalid.permission(db, mode="validator")
+    assert not status["allowed"] and status["state"] == "BlockedAfterReview"
+    assert "سياسة ربط أقدم" in status["reason"]
+    assert review.journal(db) == [row] and path.read_bytes() == original
+    current = decide(db)
+    assert current["policy"] == review.POLICY and current["previous"] == row["hash"]
+    assert path.read_bytes().startswith(original)
+    assert rovalid.permission(db, mode="validator")["allowed"]

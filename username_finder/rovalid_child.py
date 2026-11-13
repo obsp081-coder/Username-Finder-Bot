@@ -199,22 +199,19 @@ def run_engine(directory, database, packet, checker, config):
             # Structured source arguments only; omit feed/recent and all proxy/webhook strings.
             latest.clear()
             latest.update({key: value for key, value in values.items() if type(value) in (int, float, bool)})
-            if latest.get("ratelimited", 0):
-                guard.restrict("rovalid_review_required")
-                stop_requested.set()
-                for stop in stop_objects:
-                    stop.requested, stop.reason = True, "provider_restriction_review"
-                emit("restriction")
             record["progress"] = dict(latest)
             rovalid.atomic_json(directory / "run.json", record)
-            # Optional presentation only: safety detection and durable progress above never switch off.
-            if options["integration_monitoring"]:
-                emit("progress", data=latest)
+            emit("progress", data=latest)
             return Text("")
 
         def final(**values):
             summary.clear()
             summary.update(values)
+            # Persist a stop already chosen by the native engine, never derive one from counters.
+            reason = values.get("stop_reason")
+            if isinstance(reason, str) and reason.startswith("sustained_429:"):
+                guard.restrict("rovalid_review_required")
+                emit("restriction")
 
         checker.live_card, checker.final_summary = progress, final
 

@@ -11,7 +11,8 @@ from pathlib import Path
 from .roblox_activity import RobloxActivity
 from .roblox_restriction import _last_observation, checking_permission
 
-POLICY = "rovalid-reviewed-permission-v1"
+LEGACY_POLICY = "rovalid-reviewed-permission-v1"
+POLICY = "rovalid-reviewed-permission-v2-native-rate-limits"
 MODES = ("two_stage", "validator")
 CONNECTIONS = ("direct", "private", "sources")
 ENDPOINTS = {
@@ -70,7 +71,11 @@ def _journal(database):
             }:
                 raise ValueError("Malformed review audit")
             body = {k: v for k, v in item.items() if k != "hash"}
-            if item["hash"] != digest(body) or item["previous"] != previous or item["policy"] != POLICY:
+            if (
+                item["hash"] != digest(body)
+                or item["previous"] != previous
+                or item["policy"] not in (LEGACY_POLICY, POLICY)
+            ):
                 raise ValueError("Conflicting review audit")
             if item["scope"] != scope(item["scope"]["mode"], item["scope"]["connection"]):
                 raise ValueError("Invalid review scope")
@@ -177,6 +182,7 @@ def permission(database, *, mode="two_stage", connection="direct", lock_held=Fal
             local["allowed"]
             and last
             and last["decision"] == "authorize"
+            and last["policy"] == POLICY
             and last["fingerprint"] == observed["fingerprint"]
         )
         state = "Authorized" if allowed else observed["state"]
@@ -206,6 +212,11 @@ def permission(database, *, mode="two_stage", connection="direct", lock_held=Fal
             + (
                 "\nتعذر استعمال التفويض: قيد قائم أو دليل أمان تغير؛ راجع الحالة وPending بعد الإيقاف."
                 if state == "BlockedAfterReview"
+                else ""
+            )
+            + (
+                "\nالتفويض السابق يخص سياسة ربط أقدم؛ يلزم قرار صريح لسياسة RoValid الأصلية الحالية."
+                if last and last["decision"] == "authorize" and last["policy"] != POLICY
                 else ""
             )
             + "\nحالة الموفر الآن: غير معروفة؛ عرض الحالة محلي ولا يرسل طلبًا."

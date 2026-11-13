@@ -1,4 +1,4 @@
-"""Optional presentation must never switch off safety or change engine configuration."""
+"""Compatibility with the retired monitoring preference; progress is always live."""
 
 import pytest
 from PySide6.QtWidgets import QMessageBox
@@ -11,8 +11,7 @@ from username_finder.roblox_activity import RobloxActivity
 from username_finder.rovalid_ui import RoValidPanel
 
 
-def test_default_validation_and_original_engine_configuration(engine):
-    assert rovalid.settings({})["integration_monitoring"] is True
+def test_legacy_field_validation_and_original_engine_configuration(engine):
     for value in (None, 0, 1, "false"):
         with pytest.raises(ValueError):
             rovalid.settings(dict(integration_monitoring=value))
@@ -30,83 +29,78 @@ def test_default_validation_and_original_engine_configuration(engine):
     rovalid.verify_source()
 
 
-def test_preference_persists_without_preparation_and_history_never_rewrites_it(desktop, qtbot):
+@pytest.mark.parametrize("legacy", [None, True, False])
+def test_old_preferences_and_history_load_without_a_toggle_or_disk_rewrite(desktop, qtbot, legacy):
     panel = desktop.roblox
-    assert panel.integration_monitoring.isChecked()
+    assert not hasattr(panel, "integration_monitoring")
+    saved = rovalid.DEFAULTS | dict(count=27)
+    if legacy is None:
+        saved.pop("integration_monitoring")
+    else:
+        saved["integration_monitoring"] = legacy
     path = panel.root / "settings.json"
-    rovalid.atomic_json(path, rovalid.DEFAULTS | dict(count=27))
-    before = desktop.store.db.total_changes
-    panel.integration_monitoring.setChecked(False)
-    saved = rovalid.read_json(path)
-    assert saved["integration_monitoring"] is False and saved["count"] == 27
-    assert not panel.busy and desktop.store.db.total_changes == before
+    rovalid.atomic_json(path, saved)
+    original = path.read_bytes()
     second = RoValidPanel(desktop.store, desktop.make_table, desktop.fill_table)
     qtbot.addWidget(second)
-    assert not second.integration_monitoring.isChecked()
-    second.apply_options(
-        rovalid.DEFAULTS
-    )  # Loading an old operation defaults ON but is not a preference edit.
-    assert second.integration_monitoring.isChecked()
-    assert rovalid.read_json(path) == saved
+    assert second.count.value() == 27 and path.read_bytes() == original
+    assert second.options()["integration_monitoring"] is True
+    second.apply_options(rovalid.settings(saved))
+    assert path.read_bytes() == original and not second.busy
 
 
-@pytest.mark.parametrize("enabled", [True, False])
-def test_gui_and_real_child_stay_denied_without_review(desktop, qtbot, monkeypatch, enabled):
+@pytest.mark.parametrize("legacy", [True, False])
+def test_legacy_setting_cannot_bypass_parent_or_real_child_guard(desktop, qtbot, monkeypatch, legacy):
     panel = desktop.roblox
-    panel.integration_monitoring.setChecked(enabled)
     panel.count.setValue(1)
     panel.prepare()
     wait_idle(qtbot, panel)
-    assert panel.record["settings"]["integration_monitoring"] == enabled
+    panel.record["settings"]["integration_monitoring"] = legacy
+    path = panel.root / panel.current_run / "run.json"
+    rovalid.atomic_json(path, panel.record)
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
-    panel.start()  # Parent fixture mocks review; real child must independently refuse.
+    panel.start()
     wait_idle(qtbot, panel)
     assert panel.outcome == "error" and panel.record["state"] == "Prepared"
+    assert rovalid.read_json(path)["settings"]["integration_monitoring"] == legacy
     guard = RobloxActivity(desktop.store.path)
     guard.block.write_bytes(b"http_429")
     panel.controls()
     assert not panel.start_button.isEnabled()
-    monkeypatch.setattr(panel, "launch", lambda *a: pytest.fail("Historical restriction must win"))
+    monkeypatch.setattr(panel, "launch", lambda *a: pytest.fail("No restricted launch"))
     panel.start()
     assert guard.block.read_bytes() == b"http_429"
 
 
-def test_existing_record_default_and_saved_monitoring_survive_editor_changes(desktop, monkeypatch):
+@pytest.mark.parametrize("legacy", [None, True, False])
+def test_start_and_resume_accept_old_manifests_without_rewriting_them(desktop, monkeypatch, legacy):
     panel = desktop.roblox
-    options = panel.options()
-    del options["integration_monitoring"]
+    saved = panel.options()
+    if legacy is None:
+        saved.pop("integration_monitoring")
+    else:
+        saved["integration_monitoring"] = legacy
     panel.current_run = "a" * 32
-    panel.record = dict(state="Prepared", settings=options)
+    panel.record = dict(state="Prepared", settings=saved.copy())
     calls = []
     monkeypatch.setattr(panel, "launch", lambda *args: calls.append(args))
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
     panel.start()
-    assert calls  # Old manifests are compared with normalized defaults, never rewritten.
-    assert "integration_monitoring" not in panel.record["settings"]
-    panel.record = dict(state="Stopped", settings=panel.options() | dict(integration_monitoring=False))
-    panel.integration_monitoring.setChecked(True)
+    assert calls and panel.record["settings"] == saved
+    panel.record["state"] = "Stopped"
     panel.resume()
-    assert calls[-1][1]["resume"] and panel.record["settings"]["integration_monitoring"] is False
+    assert calls[-1][1]["resume"] and panel.record["settings"] == saved
 
 
-def test_safety_notification_visible_with_monitoring_off(desktop, monkeypatch):
-    panel = desktop.roblox
-    panel.integration_monitoring.setChecked(False)
-    monkeypatch.setattr(panel.process, "readAllStandardOutput", lambda: b'{"event":"restriction"}\n')
-    panel._read_output()
-    assert "قيد جديد" in panel.activity_status.text()
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_launch_displays_saved_monitoring_and_clears_stale_live_progress(desktop, monkeypatch, enabled):
+@pytest.mark.parametrize("legacy", [True, False])
+def test_launch_always_announces_live_progress_and_discards_stale_snapshot(desktop, monkeypatch, legacy):
     panel = desktop.roblox
     panel.current_run = "a" * 32
-    panel.record = dict(settings=panel.options() | dict(integration_monitoring=enabled))
-    panel.integration_monitoring.setChecked(not enabled)
+    panel.record = dict(settings=panel.options() | dict(integration_monitoring=legacy))
     panel.view_progress = (panel.current_run, dict(total=100, completed=70))
     monkeypatch.setattr(panel.process, "start", lambda: None)
     monkeypatch.setattr(panel.process, "write", lambda *a: 1)
     panel.launch("run", dict(resume=True))
     assert panel.view_progress == (panel.current_run, None)
-    assert ("مفعلة" if enabled else "متوقفة") in panel.statistics.text()
+    assert "العرض الحي" in panel.statistics.text()
     assert not panel.busy

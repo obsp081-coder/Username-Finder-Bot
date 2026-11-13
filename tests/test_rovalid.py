@@ -85,7 +85,7 @@ def test_source_hashes_and_required_files():
 
 @pytest.mark.parametrize("mode", ["two_stage", "validator"])
 @pytest.mark.parametrize("monitoring", [True, False])
-def test_new_429_invalidates_review_and_requests_managed_stop(
+def test_cumulative_429_progress_does_not_override_native_engine(
     tmp_path, database, engine, monkeypatch, mode, monitoring
 ):
     checker, config, _ = engine
@@ -94,7 +94,7 @@ def test_new_429_invalidates_review_and_requests_managed_stop(
     async def restricted(*args):
         stop = checker._StopRequest()
         checker.live_card(ratelimited=1, requests=1)
-        assert stop.requested and stop.reason == "provider_restriction_review"
+        assert not stop.requested and stop.reason is None
 
     monkeypatch.setattr(checker, "_run_rounds_owned", restricted)
     monkeypatch.setattr(checker.aiohttp, "ClientSession", lambda **kw: pytest.fail("No dispatch"))
@@ -102,12 +102,10 @@ def test_new_429_invalidates_review_and_requests_managed_stop(
     events = []
     monkeypatch.setattr(rovalid_child, "emit", lambda event, **kw: events.append(event))
     rovalid_child.run_engine(directory, database, {}, checker, config)
-    assert "restriction" in events
-    assert ("progress" in events) == monitoring
-    assert RobloxActivity(database).block.read_bytes() == b"rovalid_review_required"
-    assert rovalid.read_json(directory / "run.json")["state"] == "Stopped"
-    for other in rovalid_review.MODES:
-        assert not rovalid.permission(database, mode=other)["allowed"]
+    assert "restriction" not in events and "progress" in events
+    assert not RobloxActivity(database).block.exists()
+    saved = rovalid.read_json(directory / "run.json")
+    assert saved["state"] == "Completed" and saved["progress"]["ratelimited"] == 1
 
 
 def test_shipped_integration_requires_historical_review_even_with_fresh_runtime(tmp_path):
@@ -295,6 +293,62 @@ def transport(monkeypatch, checker, *, callback=None):
 
 
 @pytest.mark.parametrize("mode", ["two_stage", "validator"])
+@pytest.mark.parametrize("native_stop", [False, True])
+def test_native_429_retry_and_opt_in_stop_through_adapter(
+    tmp_path, database, engine, monkeypatch, mode, native_stop
+):
+    checker, config, _ = engine
+    directory, _ = prepared(
+        tmp_path,
+        engine,
+        options=dict(
+            mode=mode, concurrency=1, stop_on_429=native_stop, threshold=1, integration_monitoring=False
+        ),
+        text="TakenName\nFreeName\n",
+    )
+    attempts, trips = {}, []
+    native_cooldown = sys.modules["engine"].SharedCooldown
+    original_trip = native_cooldown.trip
+
+    def observe_trip(self, retry_after=0.0):
+        trips.append(retry_after)
+        original_trip(self, retry_after)
+
+    monkeypatch.setattr(native_cooldown, "trip", observe_trip)
+
+    def reply(name):
+        attempts[name] = attempts.get(name, 0) + 1
+        if name == "FreeName" and attempts[name] == 1:
+            response = Response({"retry_after": 0.001})
+            response.status, response.headers = 429, {"Retry-After": "0.001"}
+            return response
+        return Response({"code": 0 if name == "FreeName" else 1})
+
+    calls = transport(monkeypatch, checker, callback=reply)
+    commands = Commands()
+    monkeypatch.setattr(sys, "stdin", commands)
+    events = []
+    monkeypatch.setattr(rovalid_child, "emit", lambda event, **kw: events.append(event))
+    rovalid_child.run_engine(directory, database, {}, checker, config)
+    commands.queue.put("stop\n")
+    saved = rovalid.read_json(directory / "run.json")
+    assert "progress" in events and saved["summary"]["ratelimited"] == 1
+    assert saved["settings"]["stop_on_429"] == native_stop
+    if native_stop:
+        assert saved["state"] == "Stopped" and saved["reason"].startswith("sustained_429:")
+        assert "restriction" in events
+        assert RobloxActivity(database).block.read_bytes() == b"rovalid_review_required"
+        assert attempts["FreeName"] == 1
+        assert "FreeName" in (directory / "results/unresolved.txt").read_text()
+    else:
+        assert saved["state"] == "Completed" and saved["summary"]["works"] == 1
+        assert not RobloxActivity(database).block.exists() and "restriction" not in events
+        assert attempts["FreeName"] == 2 and trips == [pytest.approx(0.001)]
+        assert sum(c == ("validator", "FreeName") for c in calls) == 2
+        assert (directory / "results/hits.txt").read_text().splitlines() == ["FreeName"]
+
+
+@pytest.mark.parametrize("mode", ["two_stage", "validator"])
 @pytest.mark.parametrize("monitoring", [True, False])
 def test_real_engine_modes_structured_counts_and_durable_results(
     tmp_path, database, engine, monkeypatch, mode, monitoring
@@ -330,7 +384,7 @@ def test_real_engine_modes_structured_counts_and_durable_results(
     assert RobloxActivity(database).pending.read_bytes().endswith(b"Clear\n")
     assert not any("private" in json.dumps(event) for event in events)
     progress_events = [event[1]["data"] for event in events if event[0] == "progress"]
-    assert bool(progress_events) == monitoring
+    assert progress_events  # The retired monitoring field never suppresses live progress.
     final_progress = saved["progress"]
     assert final_progress["resolved"] == 4 and final_progress["requests"] == 5
     assert final_progress["rps"] == pytest.approx(5 / final_progress["elapsed"])
