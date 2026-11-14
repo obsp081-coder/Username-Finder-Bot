@@ -48,6 +48,10 @@ class JobManagerPanel(QWidget):
         header.addWidget(caption("إدارة العمليات", "pageTitle"), 1)
         self.summary = caption("", "statusPill")
         header.addWidget(self.summary)
+        self.maintenance_button = QPushButton("صيانة المنصات…")
+        self.maintenance_button.clicked.connect(self.open_maintenance)
+        header.addWidget(self.maintenance_button)
+        self.maintenance_dialog = None
         layout.addLayout(header)
         layout.addWidget(
             caption("تابع التقدم المحفوظ، وافتح العملية أو أوقفها بأمان. عمل واحد لكل منصة.", "pageSubtitle")
@@ -211,6 +215,17 @@ class JobManagerPanel(QWidget):
 
         dialog = SavedResultsDialog(self.window)
         dialog.exec()
+
+    def open_maintenance(self):
+        from .platform_maintenance_ui import PlatformMaintenanceDialog
+
+        if self.maintenance_dialog is not None:
+            return
+        dialog = PlatformMaintenanceDialog(self.window)
+        self.maintenance_dialog = dialog
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.finished.connect(lambda _: setattr(self, "maintenance_dialog", None))
+        dialog.open()
 
     def overnight_selected(self):
         row = self.selected()
